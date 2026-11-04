@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Canhão no Ar 3D</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#8ec5ff;font-family:system-ui,"Segoe UI",sans-serif;user-select:none}
+  canvas{display:block}
+  #hud{position:fixed;inset:0;pointer-events:none;color:#fff;text-shadow:0 1px 3px #000c}
+  #top{position:absolute;top:12px;left:16px;font-size:15px;line-height:1.6}
+  #feed{position:absolute;top:12px;right:16px;font-size:14px;line-height:1.6;text-align:right}
+  #center{position:absolute;top:34%;width:100%;text-align:center;font-size:56px;font-weight:800}
+  #sub{position:absolute;top:calc(34% + 70px);width:100%;text-align:center;font-size:18px}
+  #cross{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#fffc;box-shadow:0 0 2px #000}
+  #cdwrap{position:absolute;bottom:46px;left:50%;transform:translateX(-50%);width:240px;height:10px;background:#0007;border-radius:5px;overflow:hidden}
+  #cdfill{height:100%;width:100%;background:#ffcc33}
+  #cdlabel{position:absolute;bottom:60px;width:100%;text-align:center;font-size:13px;opacity:.9}
+  #help{position:absolute;bottom:14px;width:100%;text-align:center;font-size:13px;opacity:.85}
+  #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0009;color:#fff;cursor:pointer;padding:16px;box-sizing:border-box}
+  #overlay .box{max-width:520px;background:#1b2433ee;border-radius:14px;padding:24px 28px;line-height:1.5}
+  #overlay h1{margin:0 0 8px;font-size:28px}
+  #overlay ul{padding-left:20px;margin:10px 0}
+  #overlay b.go{display:block;margin-top:14px;text-align:center;font-size:20px;color:#ffcc33}
+  kbd{background:#fff2;border-radius:4px;padding:0 5px;font-family:inherit}
+  #modes{display:flex;gap:10px;margin-top:14px}
+  #modes button{flex:1;padding:10px;border-radius:10px;border:2px solid #fff3;background:#fff1;color:#fff;font:600 16px system-ui,sans-serif;cursor:pointer}
+  #modes button small{display:block;font-weight:400;font-size:12px;opacity:.75;margin-top:3px}
+  #modes button.on{border-color:#ffcc33;background:#ffcc3322}
+  .threat{position:absolute;left:50%;top:50%;width:0;height:0;margin:-13px 0 0 -14px;
+    border-left:14px solid transparent;border-right:14px solid transparent;border-bottom:26px solid #ffb347;
+    opacity:0;filter:drop-shadow(0 0 3px #000)}
+</style>
+</head>
+<body>
+<div id="danger" style="position:fixed;inset:0;pointer-events:none;opacity:0;box-shadow:inset 0 0 140px 40px rgba(255,30,40,.75)"></div>
+<div id="hud">
+  <div id="top"></div>
+  <div id="feed"></div>
+  <div id="center"></div>
+  <div id="sub"></div>
+  <div id="cross"></div>
+  <div id="cdlabel">Canhão</div>
+  <div id="cdwrap"><div id="cdfill"></div></div>
+  <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · combo: Espaço, S, Espaço, S… · R reiniciar · Esc pausa</div>
+</div>
+<div id="overlay"><div class="box">
+  <h1 id="ovTitle">Canhão no Ar 3D</h1>
+  <p>Não tem chão. A plataforma some em 3 segundos. O pulo só volta quando você encosta numa superfície, e a superfície é a sua própria bola de canhão. Pule, aperte S para soltar a bola embaixo e pule nela logo em seguida. Errou o tempo, cai. A bola sai disparada na mira e derruba os outros. O último no ar vence.</p>
+  <ul>
+    <li><kbd>W A D</kbd> mover · <kbd>Mouse</kbd> mirar</li>
+    <li><kbd>Espaço</kbd> pular · <kbd>S</kbd> canhão embaixo (clique, Shift, C e ↓ também)</li>
+    <li>Combo: <kbd>Espaço</kbd> <kbd>S</kbd> <kbd>Espaço</kbd> <kbd>S</kbd>… · <kbd>R</kbd> reiniciar</li>
+    <li>Segure <kbd>S</kbd> para carregar: a bola sai até 2x mais rápida, mas você cai enquanto carrega</li>
+    <li>Quanto mais alto, mais pesada a gravidade; lá embaixo ela alivia</li>
+  </ul>
+  <div id="modes">
+    <button data-mode="classico" class="on">Clássico<small>último no ar vence</small></button>
+    <button data-mode="renascer">Renascer<small>renasce ao vivo · quem derruba cresce · 10 kills vence</small></button>
+  </div>
+  <b class="go" id="ovGo">Clique para jogar</b>
+  <p style="opacity:.7;font-size:13px;text-align:center;margin:6px 0 0"><kbd>M</kbd> troca de modo durante o jogo</p>
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const V3 = THREE.Vector3;
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- Ajustes da mecânica ----------
+const G_PLAYER = -24;     // gravidade do jogador
+const G_BALL = -4;        // gravidade da bola (baixa: voa quase em linha reta)
+const PR = 0.5;           // raio do jogador
+const BR = 0.75;          // raio da bola
+const JUMP = 10.5;        // força do pulo
+const MOVE = 7;           // velocidade de andar
+const CD = 0.4;           // recarga do canhão (s)
+const SURFACE_WINDOW = 0.2; // tempo para pular depois de soltar a bola (s)
+const BALL_LIFE = 3;      // tempo de vida da bola (s)
+const BALL_MASS = 1.6;
+const BALL_SPEED = 45;    // bola padrão: rápida e quase reta, como um tiro de canhão
+const FIRE_SPEED = BALL_SPEED;
+const CHARGE_MAX = 1;     // segurar S por até 1 s carrega o canhão
+const CHARGE_BONUS = 1;   // carga cheia = bola 2x mais rápida
+const RECOIL_LIFT = 12;   // rebote pra cima do tiro com carga cheia (m/s)
+const KNOCK = 0.55;      // quanto do impacto da bola chega no boneco atingido
+// Gravidade gradual pela altura: pesa mais lá em cima, alivia lá embaixo.
+// Acima de 0 sobe rápido: y=+20 → x1.8 · y=+30 → x2.2 (máx).
+// Abaixo de 0 alivia pouco: y=-14 → x0.87 · perto do limite (y=-28) → x0.75.
+const gravAt = y => y >= 0 ? Math.min(2.2, 1 + y * 0.04) : Math.max(0.75, 1 + y * 0.009);
+const KILL_Y = -28;       // abaixo disso morreu
+const PLAT_R = 9;
+const STEP = 1 / 120;
+const N_BOTS = 5;
+
+// ---------- Cena ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8ec5ff);
+scene.fog = new THREE.Fog(0x8ec5ff, 45, 150);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556677, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 140 });
+sun.shadow.bias = -0.0005;
+scene.add(sun, sun.target);
+
+// Chão de lava: textura gerada em canvas (sem repetição visível nas bordas)
+function makeLavaTexture(base, spots) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const x = cv.getContext('2d');
+  x.fillStyle = base; x.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 180; i++) {
+    const px = Math.random() * 256, py = Math.random() * 256, r = rand(6, 28);
+    const col = spots[i % spots.length];
+    for (const dx of [-256, 0, 256]) for (const dy of [-256, 0, 256]) {
+      const g = x.createRadialGradient(px + dx, py + dy, 0, px + dx, py + dy, r);
+      g.addColorStop(0, col); g.addColorStop(1, 'rgba(255,60,0,0)');
+      x.fillStyle = g; x.beginPath(); x.arc(px + dx, py + dy, r, 0, 7); x.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(60, 60);
+  return t;
+}
+const lavaTex = makeLavaTexture('#a81c00', ['#ffd23a', '#ff7a1a', '#ff4a00']);
+const lava = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000),
+  new THREE.MeshBasicMaterial({ map: lavaTex, fog: false, transparent: true, opacity: 0.12, depthWrite: false }));
+lava.rotation.x = -Math.PI / 2; lava.position.y = KILL_Y;
+// fundo de lava removido (não vai para a cena)
+
+// Indicador do fim da altura: grade vermelha no limite, invisível de longe,
+// aparece conforme você se aproxima dela
+const deathGrid = new THREE.GridHelper(240, 60, 0xff3344, 0xff3344);
+deathGrid.position.y = KILL_Y;
+deathGrid.material.transparent = true; deathGrid.material.opacity = 0; deathGrid.material.depthWrite = false;
+scene.add(deathGrid);
+// segunda camada translúcida andando ao contrário: dá movimento à lava
+const lavaTex2 = makeLavaTexture('rgba(0,0,0,0)', ['#ffe066', '#ff9a2a']);
+lavaTex2.repeat.set(35, 35);
+const lava2 = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000),
+  new THREE.MeshBasicMaterial({ map: lavaTex2, transparent: true, opacity: 0.45, fog: false, depthWrite: false }));
+lava2.rotation.x = -Math.PI / 2; lava2.position.y = KILL_Y + 0.05;
+// segunda camada desligada: a lava fica só como um véu bem leve
+
+// Explosão de lava quando alguém cai
+const lavaParts = [];
+const partGeo = new THREE.SphereGeometry(1, 8, 6);
+const partMats = [0xffd23a, 0xff7a1a, 0xff3300].map(c => new THREE.MeshBasicMaterial({ color: c, fog: false }));
+function lavaBurst(x, z) {
+  const y = KILL_Y;
+  for (let i = 0; i < 70; i++) {
+    const m = new THREE.Mesh(partGeo, partMats[i % 3]);
+    const s = rand(0.15, 0.6);
+    m.scale.setScalar(s); m.position.set(x, y, z);
+    scene.add(m);
+    const a = rand(0, Math.PI * 2), h = rand(0, 7);
+    lavaParts.push({ m, s, v: new V3(Math.cos(a) * h, rand(12, 34), Math.sin(a) * h), t: 0, life: rand(1.2, 2.3) });
+  }
+  // clarão que se expande
+  const flash = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.85, fog: false }));
+  flash.position.set(x, y, z);
+  scene.add(flash);
+  lavaParts.push({ m: flash, flash: true, t: 0, life: 0.6 });
+  // coluna de lava subindo
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 1.6, 1, 14, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0.8, fog: false, side: THREE.DoubleSide }));
+  col.position.set(x, y, z);
+  scene.add(col);
+  lavaParts.push({ m: col, column: true, t: 0, life: 1.0 });
+  if (actx) boom(new V3(x, y, z), true);
+}
+function updateLavaParts(dt) {
+  for (const p of lavaParts.slice()) {
+    p.t += dt;
+    const k = p.t / p.life;
+    if (p.flash) {
+      p.m.scale.setScalar(1 + p.t * 14);
+      p.m.material.opacity = 0.85 * (1 - k);
+    } else if (p.column) {
+      const h = 14 * Math.sin(Math.min(1, k) * Math.PI); // sobe e desce
+      p.m.scale.set(1 + k, Math.max(0.01, h), 1 + k);
+      p.m.position.y = KILL_Y + h / 2;
+      p.m.material.opacity = 0.8 * (1 - k);
+    } else {
+      p.v.y -= 35 * dt;
+      p.m.position.addScaledVector(p.v, dt);
+      p.m.scale.setScalar(p.s * Math.max(0.05, 1 - k));
+    }
+    if (p.t >= p.life || (!p.flash && !p.column && p.m.position.y < KILL_Y - 1)) {
+      scene.remove(p.m);
+      if (p.flash || p.column) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
+      lavaParts.splice(lavaParts.indexOf(p), 1);
+    }
+  }
+}
+
+// Nuvens decorativas (referência de movimento, sem colisão)
+const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+const cloudGeo = new THREE.SphereGeometry(1, 12, 8);
+for (let i = 0; i < 45; i++) {
+  const g = new THREE.Group();
+  const a = Math.random() * Math.PI * 2, d = rand(28, 120);
+  g.position.set(Math.cos(a) * d, rand(-22, 30), Math.sin(a) * d);
+  const n = 3 + (Math.random() * 4 | 0);
+  for (let j = 0; j < n; j++) {
+    const s = new THREE.Mesh(cloudGeo, cloudMat);
+    const r = rand(1.5, 3.5);
+    s.scale.set(r, r * 0.7, r);
+    s.position.set(rand(-4, 4), rand(-0.6, 0.6), rand(-2, 2));
+    g.add(s);
+  }
+  scene.add(g);
+}
+
+// Plataforma inicial
+const platMat = new THREE.MeshStandardMaterial({ color: 0x8a6f4d, roughness: 0.9, transparent: true });
+const platform = new THREE.Mesh(new THREE.CylinderGeometry(PLAT_R, PLAT_R * 0.75, 1, 48), platMat);
+platform.receiveShadow = true; platform.castShadow = true;
+scene.add(platform);
+const plat = { active: true, y: -0.5, vy: 0 };
+
+// Linha-guia vertical embaixo do jogador (ajuda a ver profundidade)
+const guide = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new V3(0, 0, 0), new V3(0, -40, 0)]),
+  new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 }));
+scene.add(guide);
+
+// ---------- Som ----------
+let actx = null;
+function boom(pos, strong) {
+  if (!actx) return;
+  const d = pos.distanceTo(camFocus);
+  const vol = clamp(1 - d / 45, 0, 1) * (strong ? 0.35 : 0.22);
+  if (vol <= 0.01) return;
+  const t = actx.currentTime;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(strong ? 170 : 130, t);
+  o.frequency.exponentialRampToValueAtTime(38, t + 0.2);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + 0.3);
+}
+
+// ---------- Personagens ----------
+const NAMES = [['Você', 0xffd23f], ['Vermelho', 0xe63946], ['Verde', 0x2ec4b6], ['Roxo', 0x9d4edd], ['Laranja', 0xff8c42], ['Azul', 0x3a86ff]];
+const chars = [], balls = [], puffs = [];
+
+function nameSprite(text, color) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const x = c.getContext('2d');
+  x.font = 'bold 34px system-ui,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.lineWidth = 6; x.strokeStyle = '#000a'; x.strokeText(text, 128, 32);
+  x.fillStyle = '#' + color.toString(16).padStart(6, '0'); x.fillText(text, 128, 32);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  s.scale.set(2, 0.5, 1); s.position.y = 1.05; s.renderOrder = 10;
+  return s;
+}
+
+function makeChar(name, color, human) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(PR, 28, 20), mat);
+  body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff }), black = new THREE.MeshBasicMaterial({ color: 0x111111 });
+  for (const s of [-1, 1]) {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), white);
+    e.position.set(s * 0.17, 0.14, 0.4); g.add(e);
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), black);
+    p.position.set(s * 0.17, 0.14, 0.51); g.add(p);
+  }
+  if (!human) g.add(nameSprite(name, color));
+  scene.add(g);
+  return {
+    kind: 'p', name, color, human, mesh: g, r: PR, im: 1,
+    pos: new V3(), vel: new V3(), move: new V3(), yaw: 0, targetYaw: 0,
+    alive: true, cd: 0, groundTime: 1, groundVel: new V3(), groundBody: null, jumpCd: 0,
+    wantUnder: 0, wantFire: 0,
+    bandMat: new THREE.MeshBasicMaterial({ color }),
+    bodyMat: mat, charging: false, chargeT: 0, pendingCharge: 0,
+    size: 1, kills: 0, streak: 0, lastHitBy: null, lastHitT: -99, protect: 0, respawnT: 0,
+    ai: human ? null : {
+      react: rand(0.06, 0.17), aggr: rand(0.15, 0.6), miss: rand(0.03, 0.09), jumpDelay: 0.1,
+      wantAlt: rand(1, 6), altTimer: rand(2, 5), wanderA: rand(0, 6.28),
+      spawnT: 0, spawnDelay: 0, jumpT: 0,
+    },
+  };
+}
+
+const human = makeChar(NAMES[0][0], NAMES[0][1], true);
+chars.push(human);
+for (let i = 1; i <= N_BOTS; i++) chars.push(makeChar(NAMES[i][0], NAMES[i][1], false));
+
+// ---------- Bolas ----------
+const ballGeo = new THREE.SphereGeometry(BR, 28, 18);
+const ballMat = new THREE.MeshStandardMaterial({ color: 0x2b2b30, metalness: 0.55, roughness: 0.35 });
+const bandGeo = new THREE.TorusGeometry(BR * 1.0, 0.075, 8, 36);
+const puffGeo = new THREE.SphereGeometry(1, 12, 8);
+// cone aberto: ponta larga (+y) encostada na bola, afinando para trás
+const trailGeo = new THREE.CylinderGeometry(BR * 0.75, 0.03, 1, 14, 1, true);
+const trailMat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
+const UP = new V3(0, 1, 0);
+
+function spawnBall(owner, pos, vel) {
+  const m = new THREE.Group();
+  const s = new THREE.Mesh(ballGeo, ballMat); s.castShadow = s.receiveShadow = true; m.add(s);
+  const band = new THREE.Mesh(bandGeo, owner.bandMat); band.rotation.x = Math.PI / 2; m.add(band);
+  m.position.copy(pos); m.scale.setScalar(0.3);
+  scene.add(m);
+  // rastro de fumaça atrás da bola, para parecer tiro de canhão
+  const trail = new THREE.Mesh(trailGeo, trailMat);
+  trail.renderOrder = 2;
+  scene.add(trail);
+  const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), life: BALL_LIFE, age: 0 };
+  balls.push(b);
+  const mine = balls.filter(x => x.owner === owner);
+  if (mine.length > 6) removeBall(mine[0]);
+  addPuff(pos, owner.color);
+  boom(pos, owner.human);
+  return b;
+}
+function removeBall(b) {
+  const i = balls.indexOf(b); if (i >= 0) balls.splice(i, 1);
+  scene.remove(b.mesh);
+  if (b.trail) scene.remove(b.trail);
+  for (const c of chars) if (c.groundBody === b) c.groundBody = null;
+}
+function addPuff(pos, color) {
+  const m = new THREE.Mesh(puffGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+  m.position.copy(pos); m.scale.setScalar(0.4); scene.add(m);
+  puffs.push({ m, t: 0 });
+}
+
+function cdMult() { return mode === 'classico' && playT > 40 ? 1 + (playT - 40) / 25 : 1; }
+
+// ---------- Modos ----------
+// 'classico': último no ar vence. 'renascer': renasce ao vivo, quem derruba cresce,
+// vence quem chegar primeiro a KILL_GOAL kills.
+let mode = 'classico';
+const KILL_GOAL = 10;
+const RESPAWN_TIME = 2;
+const HIT_CREDIT = 8; // segundos: a kill vai para o dono da última bola que te acertou nesse tempo
+let clock = 0;
+const nm = c => c.human ? 'Você' : c.name;
+// cada kill seguida deixa o boneco maior (e mais pesado); morrer volta ao normal
+// Animação de crescimento ao fazer uma kill: o boneco infla e volta (pulso),
+// brilha dourado, solta um anel dourado e um texto "+1 KILL" subindo.
+const growList = [];
+const ringGeo = new THREE.TorusGeometry(1, 0.08, 8, 40);
+let popText = '', popT = 0;
+function growFx(c) {
+  c.growT = GROW_PULSE;
+  const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.9 }));
+  ring.rotation.x = Math.PI / 2; ring.position.copy(c.pos);
+  scene.add(ring);
+  growList.push({ m: ring, ring: true, t: 0, life: 0.7, r0: c.r });
+  const txt = mode === 'renascer' ? `+1 KILL  x${c.size.toFixed(2)}` : '+1 KILL';
+  const s = nameSprite(txt, 0xffd23f);
+  s.position.copy(c.pos); s.position.y += c.r + 0.8;
+  s.scale.set(3.2, 0.8, 1);
+  s.material.transparent = true;
+  scene.add(s);
+  growList.push({ m: s, t: 0, life: 1.3, owner: c });
+  if (c.human) { popText = mode === 'renascer' ? `MAIOR! x${c.size.toFixed(2)}` : '+1 KILL'; popT = 1.2; }
+}
+const GROW_PULSE = 0.6;
+function updateGrowFx(dt) {
+  for (const g of growList.slice()) {
+    g.t += dt;
+    const k = g.t / g.life;
+    if (g.ring) {
+      g.m.scale.setScalar(g.r0 + k * 4);
+      g.m.material.opacity = 0.9 * (1 - k);
+    } else {
+      g.m.position.y += dt * 2.2;
+      g.m.material.opacity = 1 - Math.max(0, k - 0.5) * 2;
+    }
+    if (g.t >= g.life) {
+      scene.remove(g.m); g.m.material.dispose();
+      if (g.m.material.map) g.m.material.map.dispose();
+      growList.splice(growList.indexOf(g), 1);
+    }
+  }
+}
+function setSize(c) {
+  // estilo agar.io: +70% por kill seguida, até 6x o tamanho
+  // (1 kill x1.7 · 3 kills x3.1 · 5 kills x4.5 · 7+ kills x6)
+  c.size = mode === 'renascer' ? Math.min(6, 1 + 0.7 * c.streak) : 1;
+  c.r = PR * c.size;
+  c.im = 1 / c.size; // mais pesado, mas sem ficar imune a tiro
+}
+function respawn(c) {
+  const a = rand(0, Math.PI * 2), d = rand(0, 8);
+  c.pos.set(Math.cos(a) * d, rand(6, 10), Math.sin(a) * d);
+  c.vel.set(0, 0, 0);
+  c.alive = true; c.mesh.visible = true;
+  c.cd = 0; c.groundTime = 1; c.groundBody = null;
+  c.surfaceWindow = 0.6;   // dá para pular logo ao renascer
+  c.protect = 1.5;         // 1,5 s sem levar empurrão
+  // morrer não zera mais o tamanho: perde metade do que cresceu
+  c.streak = Math.floor(c.streak / 2); setSize(c);
+  c.lastHitBy = null; c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
+}
+function killChar(c) {
+  c.alive = false; c.mesh.visible = false;
+  lavaBurst(c.pos.x, c.pos.z);
+  const killer = c.lastHitBy && clock - c.lastHitT < HIT_CREDIT ? c.lastHitBy : null;
+  if (killer) {
+    killer.kills++; killer.streak++; setSize(killer);
+    log(`${nm(killer)} derrubou ${nm(c)}`);
+    if (killer.alive) growFx(killer);
+  } else log(c.human ? 'Você caiu sozinho' : c.name + ' caiu sozinho');
+  if (mode === 'renascer') c.respawnT = RESPAWN_TIME;
+}
+function setMode(m) {
+  if (m === mode) return;
+  mode = m;
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  if (started) resetRound();
+}
+
+function spawnUnder(p, dir, charge = 0) {
+  if (p.cd > 0 || !p.alive || state !== 'play') return false;
+  // A bola nasce embaixo de você e sai disparada na direção da mira;
+  // o disparo te joga pra cima.
+  const pos = p.pos.clone(); pos.y -= p.r + BR * 0.6;
+  const d = dir.clone();
+  if (d.lengthSq() < 1e-4) d.set(Math.sin(p.yaw), 0, Math.cos(p.yaw));
+  d.normalize();
+  d.y = clamp(d.y, -0.6, 0.35); d.normalize();
+  const k = clamp(charge, 0, CHARGE_MAX) / CHARGE_MAX;
+  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS);
+  const ball = spawnBall(p, pos, d.clone().multiplyScalar(speed));
+  ball.charged = k > 0.25;
+  // Rebote: a explosão embaixo empurra o boneco pra cima com força proporcional
+  // à energia do tiro (cresce com o quadrado da velocidade da bola).
+  // Tiro normal ≈ +3 m/s, carga cheia (2x a velocidade) ≈ +12 m/s.
+  const e = (speed / (BALL_SPEED * (1 + CHARGE_BONUS))) ** 2;
+  const lift = RECOIL_LIFT * e;
+  p.vel.y = Math.max(p.vel.y, 0) + lift;
+  // e um pouco pra trás, contra a direção do tiro
+  p.vel.x -= d.x * lift * 0.25; p.vel.z -= d.z * lift * 0.25;
+  // a bola nasce encostada no seu pé: é a superfície que devolve o pulo,
+  // mas só por um instante — tem que apertar Espaço logo em seguida
+  p.surfaceWindow = SURFACE_WINDOW;
+  p.groundBody = null; p.groundVel.set(0, 0, 0);
+  p.cd = CD * cdMult();
+  return true;
+}
+function fire(p, dir) {
+  if (p.cd > 0 || !p.alive || state !== 'play') return false;
+  const d = dir.clone().normalize();
+  const pos = p.pos.clone().addScaledVector(d, PR + BR + 0.15);
+  const vel = d.clone().multiplyScalar(FIRE_SPEED).addScaledVector(p.vel, 0.3);
+  spawnBall(p, pos, vel);
+  p.vel.addScaledVector(d, -2.5); // recuo
+  p.cd = CD * cdMult();
+  return true;
+}
+function jump(p) {
+  // o pulo soma com o rebote do canhão (se você já está subindo, sobe mais)
+  p.vel.y = Math.max(p.vel.y, 0) + JUMP;
+  if (p.groundBody && p.groundBody.kind === 'b') p.groundBody.vel.y -= 3;
+  p.groundTime = 1; p.surfaceWindow = 0; p.jumpCd = 0.18;
+}
+// só pode pular encostado numa superfície (bola, plataforma, cabeça de alguém)
+const grounded = p => p.groundTime < 0.08 || p.surfaceWindow > 0;
+
+// ---------- Física ----------
+const tmp = new V3();
+function physics(dt) {
+  clock += dt;
+  const bodies = [];
+  for (const c of chars) if (c.alive) bodies.push(c);
+  for (const b of balls) bodies.push(b);
+
+  for (const c of chars) {
+    if (!c.alive) continue;
+    // controle horizontal
+    const g = grounded(c);
+    const hasMove = c.move.lengthSq() > 1e-4;
+    // estilo agar.io: quanto maior, mais lento
+    const mv = MOVE / Math.sqrt(c.size);
+    if (g) {
+      const k = Math.min(1, 10 * dt);
+      const tx = c.groundVel.x + c.move.x * mv, tz = c.groundVel.z + c.move.z * mv;
+      c.vel.x += (tx - c.vel.x) * k; c.vel.z += (tz - c.vel.z) * k;
+    } else if (hasMove) {
+      const k = Math.min(1, 3.5 * dt);
+      c.vel.x += (c.move.x * mv - c.vel.x) * k; c.vel.z += (c.move.z * mv - c.vel.z) * k;
+    } else {
+      c.vel.x *= 1 - 0.3 * dt; c.vel.z *= 1 - 0.3 * dt;
+    }
+    c.vel.y = Math.max(-32, c.vel.y + G_PLAYER * gravAt(c.pos.y) * dt);
+    c.contact = false;
+  }
+  for (const b of balls) {
+    b.vel.y = Math.max(-32, b.vel.y + G_BALL * gravAt(b.pos.y) * dt);
+    b.vel.x *= 1 - 0.03 * dt; b.vel.z *= 1 - 0.03 * dt;
+  }
+  for (const o of bodies) o.pos.addScaledVector(o.vel, dt);
+
+  // colisões esfera-esfera
+  for (let i = 0; i < bodies.length; i++) {
+    const a = bodies[i];
+    for (let j = i + 1; j < bodies.length; j++) {
+      const b = bodies[j];
+      // a bola recém-disparada não bate em quem atirou
+      if ((a.kind === 'b' && a.owner === b && a.age < 0.25) || (b.kind === 'b' && b.owner === a && b.age < 0.25)) continue;
+      tmp.subVectors(b.pos, a.pos);
+      const rr = a.r + b.r, d2 = tmp.lengthSq();
+      if (d2 >= rr * rr || d2 < 1e-8) continue;
+      const d = Math.sqrt(d2), n = tmp.divideScalar(d), pen = rr - d;
+      const sum = a.im + b.im;
+      a.pos.addScaledVector(n, -pen * a.im / sum);
+      b.pos.addScaledVector(n, pen * b.im / sum);
+      const vrel = (b.vel.x - a.vel.x) * n.x + (b.vel.y - a.vel.y) * n.y + (b.vel.z - a.vel.z) * n.z;
+      if (vrel < 0) {
+        const e = (a.kind === 'b' && b.kind === 'b') ? 0.35 : 0.05;
+        const jImp = -(1 + e) * vrel / sum;
+        // bola rápida em boneco: amortece o empurrão para não ser morte instantânea
+        const ka = (a.kind === 'p' && b.kind === 'b') ? (a.protect > 0 ? 0 : KNOCK) : 1;
+        const kb = (b.kind === 'p' && a.kind === 'b') ? (b.protect > 0 ? 0 : KNOCK) : 1;
+        a.vel.addScaledVector(n, -jImp * a.im * ka);
+        b.vel.addScaledVector(n, jImp * b.im * kb);
+      }
+      // crédito da kill: guarda de quem foi a última bola que te acertou
+      if (a.kind === 'p' && b.kind === 'b' && b.owner !== a) { a.lastHitBy = b.owner; a.lastHitT = clock; }
+      if (b.kind === 'p' && a.kind === 'b' && a.owner !== b) { b.lastHitBy = a.owner; b.lastHitT = clock; }
+      // apoio: quem está por cima "pisa" em quem está embaixo
+      if (a.kind === 'p' && n.y < -0.5) { a.contact = true; a.groundBody = b; a.groundVel.copy(b.vel); }
+      if (b.kind === 'p' && n.y > 0.5) { b.contact = true; b.groundBody = a; b.groundVel.copy(a.vel); }
+    }
+  }
+
+  // plataforma
+  if (plat.active) {
+    const top = plat.y + 0.5;
+    for (const o of bodies) {
+      const h = Math.hypot(o.pos.x, o.pos.z);
+      if (h < PLAT_R && o.pos.y - o.r < top && o.pos.y > top - 1.2) {
+        o.pos.y = top + o.r;
+        if (o.vel.y < 0) o.vel.y = 0;
+        if (o.kind === 'p') { o.contact = true; o.groundBody = null; o.groundVel.set(0, 0, 0); }
+      }
+    }
+  }
+
+  for (const c of chars) {
+    if (!c.alive) continue;
+    if (c.contact) c.groundTime = 0; else c.groundTime += dt;
+  }
+  for (const b of balls.slice()) {
+    b.age += dt; b.life -= dt;
+    if (b.life <= 0 || b.pos.y < KILL_Y - 5) removeBall(b);
+  }
+}
+
+// ---------- IA dos bots ----------
+function nearestEnemy(p) {
+  let best = null, bd = Infinity;
+  for (const c of chars) {
+    if (c === p || !c.alive) continue;
+    const d = c.pos.distanceToSquared(p.pos);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+function ballBelow(p, depth) {
+  for (const b of balls) {
+    const dx = b.pos.x - p.pos.x, dz = b.pos.z - p.pos.z;
+    if (dx * dx + dz * dz < 0.9 && b.pos.y < p.pos.y && b.pos.y > p.pos.y - depth) return true;
+  }
+  return false;
+}
+function botThink(p, dt) {
+  const ai = p.ai;
+  if (state !== 'play') { p.move.set(0, 0, 0); return; }
+  ai.altTimer -= dt;
+  if (ai.altTimer <= 0) { ai.altTimer = rand(2, 5); ai.wantAlt = rand(0, 8); }
+  ai.wanderA += rand(-1.5, 1.5) * dt;
+
+  const enemy = nearestEnemy(p);
+  const mv = new V3(Math.cos(ai.wanderA), 0, Math.sin(ai.wanderA)).multiplyScalar(0.4);
+  const h = Math.hypot(p.pos.x, p.pos.z);
+  if (h > 1) mv.add(new V3(-p.pos.x / h, 0, -p.pos.z / h).multiplyScalar(clamp((h - 5) / 8, 0, 1.5)));
+  let ed = Infinity;
+  if (enemy) {
+    tmp.subVectors(enemy.pos, p.pos); tmp.y = 0; ed = tmp.length();
+    if (ed > 0.1 && ed < 15) mv.addScaledVector(tmp.normalize(), ai.aggr * 0.7);
+  }
+  if (mv.length() > 1) mv.normalize();
+  p.move.copy(mv);
+  if (mv.lengthSq() > 0.01) p.targetYaw = Math.atan2(mv.x, mv.z);
+
+  // disparar: bola na direção do inimigo + arremesso pra cima
+  const g = grounded(p);
+  const need = !g && p.vel.y < -1 && (p.pos.y < ai.wantAlt || p.vel.y < -9);
+  const attack = enemy && ed < 20 && p.vel.y < 4 && Math.random() < ai.aggr * dt * 1.5;
+  if ((need || attack) && p.cd <= 0) {
+    ai.spawnT += dt;
+    if (ai.spawnT >= ai.spawnDelay) {
+      let aim;
+      if (enemy) {
+        const t = p.pos.distanceTo(enemy.pos) / BALL_SPEED;
+        aim = enemy.pos.clone().addScaledVector(enemy.vel, t).sub(p.pos);
+        aim.x += rand(-1.5, 1.5) / (ai.aggr * 3); aim.z += rand(-1.5, 1.5) / (ai.aggr * 3);
+      } else aim = mv.clone();
+      // no ataque, às vezes manda um tiro carregado
+      spawnUnder(p, aim, attack && !need && Math.random() < 0.5 ? rand(0.3, 1) * ai.aggr * 1.6 : 0);
+      ai.spawnT = 0;
+      ai.spawnDelay = Math.random() < ai.miss ? rand(0.3, 0.7) : rand(0, ai.react);
+    }
+  } else ai.spawnT = 0;
+
+  // pular: depois de soltar a bola, pula dentro da janela (às vezes erra o tempo)
+  if (grounded(p) && p.jumpCd <= 0) {
+    ai.jumpT += dt;
+    if (ai.jumpT >= ai.jumpDelay) {
+      jump(p); ai.jumpT = 0;
+      ai.jumpDelay = Math.random() < ai.miss ? rand(0.22, 0.4) : rand(0.03, ai.react);
+    }
+  } else ai.jumpT = 0;
+}
+
+// ---------- Entrada ----------
+const keys = {};
+let camYaw = 0, camPitch = 0.4;
+let started = false, paused = false, locked = false, lockFails = false, dragging = false;
+const UNDER_KEYS = ['KeyS', 'ShiftLeft', 'ShiftRight', 'KeyC', 'ArrowDown'];
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (!started || paused) return;
+  if (UNDER_KEYS.includes(e.code) && !e.repeat) startCharge();
+  if (e.code === 'Space' && !e.repeat) human.wantJump = 0.06;
+  if (e.code === 'KeyR' && !e.repeat) resetRound();
+  if (e.code === 'KeyM' && !e.repeat) setMode(mode === 'classico' ? 'renascer' : 'classico');
+});
+addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (UNDER_KEYS.includes(e.code)) releaseCharge();
+});
+// Canhão: apertou começa a carregar, soltou dispara. Toque rápido = tiro normal.
+function startCharge() {
+  if (human.charging || !human.alive) return;
+  human.charging = true; human.chargeT = 0;
+}
+function releaseCharge() {
+  if (!human.charging) return;
+  human.charging = false;
+  human.pendingCharge = human.chargeT;
+  human.chargeT = 0;
+  human.wantUnder = 0.08;
+}
+addEventListener('contextmenu', e => e.preventDefault());
+
+const overlay = document.getElementById('overlay');
+// escolher o modo no menu (o clique segue para o overlay e começa o jogo)
+document.querySelectorAll('#modes button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+overlay.addEventListener('click', () => {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  overlay.style.display = 'none';
+  if (!started) { started = true; resetRound(); }
+  paused = false;
+  requestLock();
+});
+function requestLock() {
+  try { const r = renderer.domElement.requestPointerLock(); if (r && r.catch) r.catch(() => { lockFails = true; }); }
+  catch (e) { lockFails = true; }
+}
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === renderer.domElement;
+  if (!locked && started && !lockFails) {
+    paused = true;
+    document.getElementById('ovTitle').textContent = 'Pausado';
+    document.getElementById('ovGo').textContent = 'Clique para voltar';
+    overlay.style.display = 'flex';
+  }
+});
+document.addEventListener('pointerlockerror', () => { lockFails = true; });
+
+renderer.domElement.addEventListener('mousedown', e => {
+  if (!started || paused) return;
+  if (!locked && !lockFails) { requestLock(); return; }
+  if (!locked) dragging = true;
+  if (e.button === 0 || e.button === 2) startCharge();
+});
+addEventListener('mouseup', e => {
+  dragging = false;
+  if (e.button === 0 || e.button === 2) releaseCharge();
+});
+addEventListener('mousemove', e => {
+  if (!(locked || dragging)) return;
+  camYaw -= e.movementX * 0.0025;
+  camPitch = clamp(camPitch + e.movementY * 0.0025, -0.5, 1.35);
+});
+
+// Raio da câmera pelo centro da tela: acerta o primeiro bot ou bola; se nada, um ponto a 40 m.
+function aimTarget(origin, dir) {
+  let best = 40;
+  for (const o of [...chars, ...balls]) {
+    if (o === human || (o.kind === 'p' && !o.alive)) continue;
+    const oc = o.pos.clone().sub(origin);
+    const t = oc.dot(dir);
+    if (t < 2 || t >= best) continue;
+    const d2 = oc.lengthSq() - t * t;
+    if (d2 < o.r * o.r) best = t;
+  }
+  return origin.clone().addScaledVector(dir, best);
+}
+
+function humanInput(dt) {
+  const f = new V3(-Math.sin(camYaw), 0, -Math.cos(camYaw));
+  const r = new V3(Math.cos(camYaw), 0, -Math.sin(camYaw));
+  const fw = keys.KeyW || keys.ArrowUp ? 1 : 0; // S é o canhão
+  const st = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+  const mv = f.clone().multiplyScalar(fw).addScaledVector(r, st);
+  if (mv.lengthSq() > 1) mv.normalize();
+  human.move.copy(mv);
+  human.targetYaw = Math.atan2(f.x, f.z);
+  if (!human.alive) return;
+
+  // Espaço: um toque, um pulo — e só se estiver encostado numa superfície
+  if (human.wantJump > 0) {
+    if (grounded(human) && human.jumpCd <= 0) { jump(human); human.wantJump = 0; }
+    else human.wantJump -= dt;
+  }
+
+  // Mira: ponto do mundo sob a mira (centro da tela). A bola vai na direção dele.
+  const camDir = new V3(); camera.getWorldDirection(camDir);
+  const aimPoint = aimTarget(camera.position, camDir);
+
+  // Shift/C/↓/clique: uma ação só — bola disparada na mira + arremesso pra cima
+  if (human.charging) human.chargeT = Math.min(CHARGE_MAX, human.chargeT + dt);
+  if (human.wantUnder > 0) {
+    const d = aimPoint.clone().sub(human.pos);
+    if (spawnUnder(human, d, human.pendingCharge)) { human.wantUnder = 0; human.pendingCharge = 0; }
+    else human.wantUnder -= dt;
+  }
+}
+
+// ---------- Rodadas ----------
+let state = 'countdown', stateT = 0, playT = 0, wins = 0, rounds = 0, winnerText = '';
+const feed = [];
+function log(msg) { feed.push({ msg, t: 5 }); if (feed.length > 6) feed.shift(); }
+
+function resetRound() {
+  for (const b of balls.slice()) removeBall(b);
+  for (const p of puffs) scene.remove(p.m); puffs.length = 0;
+  plat.active = true; plat.y = -0.5; plat.vy = 0; platMat.opacity = 1; platform.visible = true;
+  chars.forEach((c, i) => {
+    const a = i / chars.length * Math.PI * 2;
+    c.pos.set(Math.cos(a) * 5.5, PR + 0.01, Math.sin(a) * 5.5);
+    c.vel.set(0, 0, 0); c.alive = true; c.mesh.visible = true; c.cd = 0; c.groundTime = 1;
+    c.wantUnder = c.wantFire = c.wantJump = 0; c.surfaceWindow = 0; c.groundBody = null;
+    c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
+    c.kills = 0; c.streak = 0; c.lastHitBy = null; c.protect = 0; c.respawnT = 0; setSize(c);
+    c.yaw = c.targetYaw = Math.atan2(-c.pos.x, -c.pos.z);
+    if (c.ai) { c.ai.spawnT = 0; c.ai.jumpT = 0; c.ai.spawnDelay = rand(0, c.ai.react); }
+  });
+  camYaw = Math.atan2(human.pos.x, human.pos.z);
+  camFocus.copy(human.pos);
+  state = 'countdown'; stateT = 0; playT = 0; feed.length = 0; winnerText = '';
+}
+
+function updateState(dt) {
+  stateT += dt;
+  if (state === 'countdown' && stateT >= 3) { state = 'play'; stateT = 0; plat.vy = -2; }
+  if (state === 'play') {
+    playT += dt;
+    if (plat.active && stateT > 0) {
+      plat.vy -= 14 * dt; plat.y += plat.vy * dt;
+      platMat.opacity = clamp(1 + plat.y / 6, 0, 1);
+      if (plat.y < -3) plat.active = false;
+    }
+    for (const c of chars) {
+      if (c.alive && c.pos.y < KILL_Y) killChar(c);
+      else if (!c.alive && mode === 'renascer' && c.respawnT > 0) {
+        c.respawnT -= dt;
+        if (c.respawnT <= 0) respawn(c);
+      }
+    }
+    const alive = chars.filter(c => c.alive);
+    if (mode === 'renascer') {
+      const top = chars.reduce((a, b) => (b.kills > a.kills ? b : a));
+      if (top.kills >= KILL_GOAL) {
+        rounds++;
+        if (top.human) { wins++; winnerText = 'Você venceu!'; } else winnerText = top.name + ' venceu';
+        state = 'end'; stateT = 0;
+      }
+    } else if (alive.length <= 1) {
+      rounds++;
+      if (alive.length === 1) {
+        if (alive[0].human) { wins++; winnerText = 'Você venceu!'; }
+        else winnerText = alive[0].name + ' venceu';
+      } else winnerText = 'Empate';
+      state = 'end'; stateT = 0;
+    }
+  }
+  if (!plat.active) platform.visible = false;
+  platform.position.y = plat.y;
+  if (state === 'end' && stateT > 3.5) resetRound();
+}
+
+// ---------- Loop ----------
+const camFocus = new V3();
+const dangerEl = document.getElementById('danger');
+
+// Setas de perigo: apontam para as bolas inimigas que vão passar perto de você
+// (até 3, a mais próxima de chegar primeiro). Vermelha = tiro carregado.
+const threatEls = [0, 1, 2].map(() => {
+  const d = document.createElement('div'); d.className = 'threat';
+  document.getElementById('hud').appendChild(d);
+  return d;
+});
+function updateThreats() {
+  const threats = [];
+  if (human.alive) for (const b of balls) {
+    if (b.owner === human) continue;
+    const rel = human.pos.clone().sub(b.pos);
+    const v = b.vel.clone().sub(human.vel);
+    const v2 = v.lengthSq();
+    if (v2 < 25) continue;                    // bola parada não ameaça
+    const t = rel.dot(v) / v2;                // tempo até a menor distância
+    if (t <= 0 || t > 2.5) continue;          // indo embora, ou longe demais
+    const miss = rel.addScaledVector(v, -t).length();
+    if (miss > 3) continue;                   // vai passar longe
+    threats.push({ b, t });
+  }
+  threats.sort((a, b) => a.t - b.t);
+  const R = Math.min(innerWidth, innerHeight) * 0.36;
+  camera.updateMatrixWorld();
+  threatEls.forEach((el, i) => {
+    const th = threats[i];
+    if (!th) { el.style.opacity = 0; return; }
+    const p = th.b.pos.clone().applyMatrix4(camera.matrixWorldInverse);
+    let sx = p.x, sy = -p.y;
+    const l = Math.hypot(sx, sy) || 1; sx /= l; sy /= l;
+    el.style.transform = `translate(${(sx * R).toFixed(1)}px,${(sy * R).toFixed(1)}px) rotate(${Math.atan2(sx, -sy).toFixed(3)}rad)`;
+    el.style.borderBottomColor = th.b.charged ? '#ff2a2a' : '#ffb347';
+    el.style.opacity = clamp(1.2 - th.t / 2.5, 0.35, 1).toFixed(2);
+  });
+}
+const hud = {
+  top: document.getElementById('top'), feed: document.getElementById('feed'),
+  center: document.getElementById('center'), sub: document.getElementById('sub'),
+  cd: document.getElementById('cdfill'),
+};
+let acc = 0, last = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (started && !paused) {
+    humanInput(dt);
+    for (const c of chars) {
+      c.cd = Math.max(0, c.cd - dt); c.jumpCd = Math.max(0, c.jumpCd - dt);
+      c.surfaceWindow = Math.max(0, (c.surfaceWindow || 0) - dt);
+      c.protect = Math.max(0, c.protect - dt);
+      if (c.ai && c.alive) botThink(c, dt);
+    }
+    updateState(dt);
+    acc += dt;
+    let n = 0;
+    while (acc >= STEP && n < 8) { physics(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+    for (const p of puffs.slice()) {
+      p.t += dt; p.m.scale.setScalar(0.4 + p.t * 6); p.m.material.opacity = 0.7 * (1 - p.t / 0.3);
+      if (p.t > 0.3) { scene.remove(p.m); puffs.splice(puffs.indexOf(p), 1); }
+    }
+    for (const f of feed) f.t -= dt;
+    updateLavaParts(dt);
+    lavaTex.offset.x += dt * 0.02; lavaTex.offset.y += dt * 0.012;
+    lavaTex2.offset.x -= dt * 0.035; lavaTex2.offset.y += dt * 0.02;
+  }
+
+  // sincroniza malhas
+  for (const c of chars) {
+    if (!c.alive) continue;
+    c.mesh.position.copy(c.pos);
+    let dy = c.targetYaw - c.yaw;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    c.yaw += dy * Math.min(1, 12 * dt);
+    c.mesh.rotation.y = c.yaw;
+    // caindo sem superfície: posição aberta (achatado e esparramado)
+    const open = !grounded(c) && c.vel.y < -2;
+    // pulso de crescimento: infla 45% e volta
+    c.growT = Math.max(0, (c.growT || 0) - dt);
+    const pulse = c.growT > 0 ? 1 + 0.45 * Math.sin((1 - c.growT / GROW_PULSE) * Math.PI) : 1;
+    const tx = (open ? 1.35 : 1) * c.size * pulse, ty = (open ? 0.7 : 1) * c.size * pulse;
+    // protegido logo após renascer: pisca
+    c.mesh.visible = c.protect > 0 ? Math.floor(clock * 12) % 2 === 0 : true;
+    const k = Math.min(1, 10 * dt);
+    c.mesh.scale.x += (tx - c.mesh.scale.x) * k;
+    c.mesh.scale.z += (tx - c.mesh.scale.z) * k;
+    c.mesh.scale.y += (ty - c.mesh.scale.y) * k;
+    // carregando: o boneco brilha cada vez mais
+    // brilho: dourado ao crescer; carregando, cor própria; com sequência, brilho leve constante
+    if (c.growT > 0) {
+      c.bodyMat.emissive.setHex(0xffd23f);
+      c.bodyMat.emissiveIntensity = 0.9 * (c.growT / GROW_PULSE);
+    } else {
+      c.bodyMat.emissive.setHex(c.color);
+      c.bodyMat.emissiveIntensity = c.charging ? 0.15 + 0.6 * (c.chargeT / CHARGE_MAX) : Math.min(0.35, c.streak * 0.07);
+    }
+  }
+  updateGrowFx(dt);
+  popT = Math.max(0, popT - dt);
+  for (const b of balls) {
+    b.mesh.position.copy(b.pos);
+    const sp = Math.hypot(b.vel.x, b.vel.z);
+    if (sp > 0.05) {
+      const axis = new V3(b.vel.z, 0, -b.vel.x).normalize();
+      b.mesh.rotateOnWorldAxis(axis, sp * dt / BR);
+    }
+    let sc = Math.min(1, 0.3 + b.age * 8);
+    if (b.life < 0.4) sc *= Math.max(0.05, b.life / 0.4);
+    b.mesh.scale.setScalar(sc);
+    const speed = b.vel.length();
+    if (speed > 8) {
+      const dir = b.vel.clone().divideScalar(speed);
+      const len = clamp(speed * 0.07, 0.5, 7) * sc;
+      b.trail.visible = true;
+      b.trail.quaternion.setFromUnitVectors(UP, dir);
+      b.trail.scale.set(sc, len, sc);
+      b.trail.position.copy(b.pos).addScaledVector(dir, -len / 2);
+    } else b.trail.visible = false;
+  }
+
+  // câmera em 3ª pessoa
+  let target = human;
+  if (!human.alive) target = chars.find(c => c.alive) || human;
+  camFocus.lerp(target.pos, 1 - Math.exp(-12 * dt));
+  // câmera se afasta quando você cresce
+  const dist = 7.5 * (0.55 + 0.45 * target.size), cp = Math.cos(camPitch);
+  const look = new V3(camFocus.x, camFocus.y + 0.8, camFocus.z);
+  camera.position.set(look.x + Math.sin(camYaw) * cp * dist, look.y + Math.sin(camPitch) * dist, look.z + Math.cos(camYaw) * cp * dist);
+  camera.lookAt(look);
+  sun.position.set(camFocus.x + 8, camFocus.y + 45, camFocus.z + 5);
+  sun.target.position.copy(camFocus);
+  // perto do fim: a grade acende e a borda da tela fica vermelha
+  const toEnd = (human.alive ? human.pos.y : camFocus.y) - KILL_Y;
+  deathGrid.material.opacity = clamp(1 - toEnd / 22, 0.06, 0.75);
+  deathGrid.position.x = Math.round(camFocus.x / 4) * 4;
+  deathGrid.position.z = Math.round(camFocus.z / 4) * 4;
+  dangerEl.style.opacity = human.alive ? clamp(1 - toEnd / 12, 0, 1).toFixed(2) : 0;
+  updateThreats();
+  guide.visible = human.alive;
+  guide.position.copy(human.pos);
+
+  // HUD
+  const alive = chars.filter(c => c.alive).length;
+  const board = mode === 'renascer'
+    ? `Modo: <b>Renascer</b> · meta ${KILL_GOAL} kills<br>` +
+      chars.slice().sort((a, b) => b.kills - a.kills).map(c =>
+        `<span style="color:#${c.color.toString(16).padStart(6, '0')}">${nm(c)}</span> <b>${c.kills}</b>` +
+        ` <small>tamanho x${c.size.toFixed(1)}</small>`).join('<br>') + '<br><br>'
+    : `Modo: <b>Clássico</b><br>Vivos: <b>${alive}/${chars.length}</b><br>`;
+  hud.top.innerHTML = board +
+    `Altura: <b>${(human.alive ? human.pos.y : 0).toFixed(1)}</b><br>` +
+    `Gravidade: <b>x${gravAt(human.alive ? human.pos.y : 0).toFixed(2)}</b><br>` +
+    `Até o fim: <b style="color:${toEnd < 10 ? '#ff6b6b' : 'inherit'}">${Math.max(0, toEnd).toFixed(0)} m</b><br>` +
+    `Tempo: <b>${playT.toFixed(0)}s</b><br>` +
+    `Vitórias: <b>${wins}</b> de ${rounds}` +
+    (cdMult() > 1 ? `<br><span style="color:#ff8c8c">Morte súbita: recarga x${cdMult().toFixed(1)}</span>` : '');
+  hud.feed.innerHTML = feed.filter(f => f.t > 0).map(f => f.msg).join('<br>');
+  if (human.charging) {
+    // barra vira medidor de carga
+    hud.cd.style.width = (100 * human.chargeT / CHARGE_MAX).toFixed(0) + '%';
+    hud.cd.style.background = human.chargeT >= CHARGE_MAX ? '#ff3b3b' : '#ff8c42';
+  } else {
+    hud.cd.style.width = (100 * (1 - human.cd / (CD * cdMult()))).toFixed(0) + '%';
+    hud.cd.style.background = human.cd <= 0 ? '#ffcc33' : '#887744';
+  }
+  let center = '', sub = '';
+  if (state === 'countdown') { center = Math.ceil(3 - stateT); sub = 'A plataforma vai sumir — prepare o canhão'; }
+  else if (state === 'play' && stateT < 0.8) center = 'VAI!';
+  else if (state === 'end') { center = winnerText; sub = 'Próxima rodada já já…'; }
+  else if (!human.alive && mode === 'renascer') sub = `Renascendo em ${Math.max(0, human.respawnT).toFixed(1)} s`;
+  else if (!human.alive) sub = 'Você caiu. Assistindo… (R reinicia)';
+  if (!center && popT > 0) center = popText;
+  hud.center.textContent = center; hud.sub.textContent = sub;
+  hud.center.style.color = !center || center !== popText ? '' : '#ffd23f';
+  hud.center.style.transform = popT > 0 && center === popText ? `scale(${(1 + 0.4 * Math.max(0, popT - 0.9) / 0.3).toFixed(2)})` : '';
+
+  renderer.render(scene, camera);
+}
+resetRound();
+requestAnimationFrame(frame);
+
+// Gancho para testes no console
+window.game = { chars, balls, human, get state() { return state; }, resetRound, spawnUnder, fire, jump };
+</script>
+</body>
+</html>
