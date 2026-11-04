@@ -111,7 +111,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // ---------- Ajustes da mecânica ----------
 const G_PLAYER = -24;     // gravidade do jogador
-const G_BALL = -4;        // gravidade da bola (baixa: voa quase em linha reta)
+// a bola não tem gravidade, vento nem atrito: voa reta até sair do alcance
 const PR = 0.5;           // raio do jogador
 const BR = 0.75;          // raio da bola
 const JUMP = 10.5;        // força do pulo
@@ -124,7 +124,7 @@ const JAM = 0.3;          // castigo por apertar cedo demais (s)
 const PERFECT_SPEED = 1.2; // tiro perfeito: bola 20% mais rápida (rebote ~44% maior)
 // Arrasto: bola rápida que acerta alguém leva o boneco junto por um instante
 const DRAG_MIN = 20;      // velocidade mínima da bola para arrastar (m/s)
-const DRAG_SHARE = 0.36;  // fração da velocidade da bola que o boneco ganha
+const DRAG_SHARE = 0.3;   // fração da velocidade da bola que o boneco ganha
 // Ritmo: cada pulo na própria bola soma combo; parar de pular por COMBO_WINDOW zera
 const COMBO_WINDOW = 1.4;
 const TIERS = [ // [combo mínimo, nome, cor, bônus de velocidade da bola, multiplicador da recarga]
@@ -146,9 +146,11 @@ const PW = {
 };
 const PW_KEYS = Object.keys(PW);
 const SURFACE_WINDOW = 0.2; // tempo para pular depois de soltar a bola (s)
-const BALL_LIFE = 3;      // tempo de vida da bola (s)
+const BALL_RANGE = 130;   // a bola some ao passar dessa distância do centro (m)
+const BALL_TOP = 80;      // ... ou dessa altura (m)
+const BALL_SAFE = 12;     // trava de segurança: bola que ficou quase parada some depois disso (s)
 const BALL_MASS = 1.6;
-const BALL_SPEED = 45;    // bola padrão: rápida e quase reta, como um tiro de canhão
+const BALL_SPEED = 80;    // bola padrão: muito rápida e reta, como um tiro de canhão
 const FIRE_SPEED = BALL_SPEED;
 const CHARGE_MAX = 1;     // segurar S por até 1 s carrega o canhão
 const CHARGE_BONUS = 1;   // carga cheia = bola 2x mais rápida
@@ -541,10 +543,10 @@ function spawnBall(owner, pos, vel) {
   const trail = new THREE.Mesh(trailGeo, trailFor(owner));
   trail.renderOrder = 2;
   scene.add(trail);
-  const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), life: BALL_LIFE, age: 0, big: 1 };
+  const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), age: 0, big: 1 };
   balls.push(b);
   const mine = balls.filter(x => x.owner === owner);
-  if (mine.length > 9) removeBall(mine[0]);
+  if (mine.length > 20) removeBall(mine[0]);
   addPuff(pos, owner.color);
   boom(pos, owner.human);
   return b;
@@ -569,7 +571,7 @@ const MODS = {
   lua: ['GRAVIDADE LUNAR', 'todo mundo pesa 40% menos'],
   gigantes: ['BOLAS GIGANTES', 'toda bola é gigante e arrasta mais'],
   chuva: ['CHUVA DE ORBES', 'power-up aparecendo o tempo todo'],
-  vento: ['VENTANIA', 'o vento empurra você e as bolas'],
+  vento: ['VENTANIA', 'o vento empurra você'],
   turbo: ['CANHÃO TURBO', 'recarga quase pela metade'],
   pesado: ['TIRO PESADO', 'bola mais lenta, mas arrasta muito mais'],
 };
@@ -1168,7 +1170,14 @@ const grounded = p => p.groundTime < 0.1 || p.surfaceWindow > 0;
 
 // ---------- Física ----------
 const tmp = new V3();
+// bola muito rápida: divide o passo para ela não atravessar ninguém sem bater
 function physics(dt) {
+  let max = 0;
+  for (const b of balls) max = Math.max(max, b.vel.lengthSq());
+  const n = Math.min(5, Math.max(1, Math.ceil(Math.sqrt(max) * dt / 0.75)));
+  for (let i = 0; i < n; i++) physicsStep(dt / n);
+}
+function physicsStep(dt) {
   clock += dt;
   const bodies = [];
   for (const c of chars) if (c.alive) bodies.push(c);
@@ -1195,11 +1204,7 @@ function physics(dt) {
     if (mod === 'vento' && !c.dragB) { c.vel.x += wind.x * 3.2 * dt; c.vel.z += wind.z * 3.2 * dt; }
     c.contact = false;
   }
-  for (const b of balls) {
-    b.vel.y = Math.max(-32, b.vel.y + G_BALL * gravAt(b.pos.y) * gravMod() * dt);
-    if (mod === 'vento') { b.vel.x += wind.x * 2.5 * dt; b.vel.z += wind.z * 2.5 * dt; }
-    b.vel.x *= 1 - 0.03 * dt; b.vel.z *= 1 - 0.03 * dt;
-  }
+  // bolas: sem gravidade, sem vento, sem atrito — seguem retas
   for (const o of bodies) o.pos.addScaledVector(o.vel, dt);
 
   // arrasto: o boneco atingido vai colado na frente da bola até o tempo acabar
@@ -1208,7 +1213,6 @@ function physics(dt) {
     const b = c.dragB;
     c.dragT -= dt;
     if (!c.alive || c.dragT <= 0 || !balls.includes(b)) { c.dragB = null; continue; }
-    b.vel.multiplyScalar(1 - 1.2 * dt);
     const sp = b.vel.length();
     if (sp < 3) { c.dragB = null; continue; }
     tmp.copy(b.vel).divideScalar(sp);
@@ -1241,7 +1245,7 @@ function physics(dt) {
         if (bl.owner !== pc && pc.protect <= 0 && !pc.dragB && into > DRAG_MIN) {
           if (shieldBlock(pc)) { bl.vel.multiplyScalar(-0.45); bl.owner = pc; continue; }
           pc.lastHitBy = bl.owner; pc.lastHitT = clock;
-          const k = clamp((into - DRAG_MIN) / 70, 0, 1); // 45 m/s ≈ 0.36 · carga cheia ≈ 1
+          const k = clamp((into - DRAG_MIN) / (BALL_SPEED * 2 - DRAG_MIN), 0, 1); // tiro normal ≈ 0.43 · carga cheia ≈ 1
           const v = bl.vel.clone().multiplyScalar(dragShare() * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
           pc.vel.copy(v); bl.vel.copy(v);
           pc.dragB = bl; pc.dragT = 0.16 + 0.24 * k + (bl.perfect ? 0.08 : 0); pc.hitBall = bl;
@@ -1308,8 +1312,9 @@ function physics(dt) {
     if (c.contact) c.groundTime = 0; else c.groundTime += dt;
   }
   for (const b of balls.slice()) {
-    b.age += dt; b.life -= dt; if (b.clashT > 0) b.clashT -= dt;
-    if (b.life <= 0 || b.pos.y < killY - 5) removeBall(b);
+    b.age += dt; if (b.clashT > 0) b.clashT -= dt;
+    // saiu do alcance: some (economiza memória)
+    if (Math.hypot(b.pos.x, b.pos.z) > BALL_RANGE || b.pos.y > BALL_TOP || b.pos.y < killY - 5 || b.age > BALL_SAFE) removeBall(b);
   }
 }
 
@@ -1848,7 +1853,7 @@ function frame(now) {
       b.mesh.rotateOnWorldAxis(axis, sp * dt / BR);
     }
     let sc = Math.min(1, 0.3 + b.age * 8) * b.big;
-    if (b.life < 0.4) sc *= Math.max(0.05, b.life / 0.4);
+    sc *= clamp((BALL_RANGE - Math.hypot(b.pos.x, b.pos.z)) / 8, 0.05, 1); // encolhe chegando no limite
     b.mesh.scale.setScalar(sc);
     const speed = b.vel.length();
     if (speed > 8) {
