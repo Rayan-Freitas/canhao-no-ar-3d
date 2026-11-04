@@ -12,7 +12,16 @@
   #feed{position:absolute;top:12px;right:16px;font-size:14px;line-height:1.6;text-align:right}
   #center{position:absolute;top:34%;width:100%;text-align:center;font-size:56px;font-weight:800}
   #sub{position:absolute;top:calc(34% + 70px);width:100%;text-align:center;font-size:18px}
-  #cross{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#fffc;box-shadow:0 0 2px #000}
+  #cross{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#fffc;box-shadow:0 0 2px #000;transition:all .08s}
+  #cross.lock{width:22px;height:22px;margin:-11px 0 0 -11px;background:transparent;border:2px solid #ff5a5a;box-shadow:0 0 4px #000}
+  #hitmark{position:absolute;left:50%;top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;opacity:0}
+  #hitmark:before,#hitmark:after{content:'';position:absolute;left:13px;top:0;width:4px;height:30px;background:#fff;border-radius:2px;box-shadow:0 0 3px #000}
+  #hitmark:before{transform:rotate(45deg)} #hitmark:after{transform:rotate(-45deg)}
+  #hitmark.kill:before,#hitmark.kill:after{background:#ff3b3b}
+  #toast{position:absolute;left:0;right:0;top:calc(50% + 34px);text-align:center;font-size:17px;font-weight:800;opacity:0}
+  #speed{position:fixed;inset:-20%;pointer-events:none;opacity:0;
+    background:repeating-conic-gradient(from 0deg,#fff0 0deg 5deg,#ffffff30 5deg 5.6deg);
+    -webkit-mask:radial-gradient(circle,transparent 30%,#000 70%);mask:radial-gradient(circle,transparent 30%,#000 70%)}
   #cdwrap{position:absolute;bottom:46px;left:50%;transform:translateX(-50%);width:240px;height:10px;background:#0007;border-radius:5px;overflow:hidden}
   #cdfill{height:100%;width:100%;background:#ffcc33}
   #cdzone{position:absolute;top:0;height:100%;left:45%;width:25%;background:#ffffff55;box-shadow:inset 0 0 0 1px #fff;display:none}
@@ -49,13 +58,16 @@
 </style>
 </head>
 <body>
-<div id="danger" style="position:fixed;inset:0;pointer-events:none;opacity:0;box-shadow:inset 0 0 140px 40px rgba(255,30,40,.75)"></div>
+<div id="speed"></div>
+<div id="danger"style="position:fixed;inset:0;pointer-events:none;opacity:0;box-shadow:inset 0 0 140px 40px rgba(255,30,40,.75)"></div>
 <div id="hud">
   <div id="top"></div>
   <div id="feed"></div>
   <div id="center"></div>
   <div id="sub"></div>
   <div id="cross"></div>
+  <div id="hitmark"></div>
+  <div id="toast"></div>
   <div id="cdlabel">Canhão</div>
   <div id="cdwrap"><div id="cdfill"></div><div id="cdzone"></div></div>
   <div id="combo"><span id="comboN"></span><small id="comboTier"></small><div id="combobar"><i id="comboFill"></i></div></div>
@@ -398,18 +410,32 @@ function impactFx(c, pt, dir, k, color, byHuman, gold) {
 const NAMES = [['Você', 0xffd23f], ['Vermelho', 0xe63946], ['Verde', 0x2ec4b6], ['Roxo', 0x9d4edd], ['Laranja', 0xff8c42], ['Azul', 0x3a86ff]];
 const chars = [], balls = [], puffs = [];
 
-function nameSprite(text, color) {
+function nameSprite(text, color, subtitle) {
   const c = document.createElement('canvas'); c.width = 256; c.height = 64;
   const x = c.getContext('2d');
-  x.font = 'bold 34px system-ui,sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.lineWidth = 6; x.strokeStyle = '#000a'; x.strokeText(text, 128, 32);
-  x.fillStyle = '#' + color.toString(16).padStart(6, '0'); x.fillText(text, 128, 32);
+  const y = subtitle ? 22 : 32;
+  x.font = `bold ${subtitle ? 28 : 34}px system-ui,sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.lineWidth = 6; x.strokeStyle = '#000a'; x.strokeText(text, 128, y);
+  x.fillStyle = '#' + color.toString(16).padStart(6, '0'); x.fillText(text, 128, y);
+  if (subtitle) {
+    x.font = '600 19px system-ui,sans-serif'; x.lineWidth = 5;
+    x.strokeText(subtitle, 128, 50); x.fillStyle = '#ffffffdd'; x.fillText(subtitle, 128, 50);
+  }
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
   s.scale.set(2, 0.5, 1); s.position.y = 1.05; s.renderOrder = 10;
   return s;
 }
 
-function makeChar(name, color, human) {
+// Personalidades dos bots: cada um tem um jeito de jogar que dá para reconhecer
+const PERSONAS = {
+  atirador: 'Atirador',    // carrega tiro e mantém distância
+  esquivo: 'Esquivo',      // desvia quase tudo com dash
+  pisador: 'Pisador',      // sobe acima de você e cai na sua cabeça
+  cacador: 'Caçador',      // vive atrás dos orbes
+  equilibrado: 'Equilibrado',
+};
+const PERSONA_ORDER = ['atirador', 'esquivo', 'pisador', 'cacador', 'equilibrado'];
+function makeChar(name, color, human, per) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
   const body = new THREE.Mesh(new THREE.SphereGeometry(PR, 28, 20), mat);
@@ -422,7 +448,7 @@ function makeChar(name, color, human) {
     const p = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), black);
     p.position.set(s * 0.17, 0.14, 0.51); g.add(p);
   }
-  if (!human) g.add(nameSprite(name, color));
+  if (!human) g.add(nameSprite(name, color, per ? PERSONAS[per] : ''));
   // bolha do escudo (power-up)
   const shield = new THREE.Mesh(new THREE.SphereGeometry(PR * 1.45, 20, 14),
     new THREE.MeshBasicMaterial({ color: PW.escudo[1], transparent: true, opacity: 0.28, depthWrite: false }));
@@ -441,7 +467,7 @@ function makeChar(name, color, human) {
     ai: human ? null : {
       react: rand(0.06, 0.17), aggr: rand(0.15, 0.6), miss: rand(0.03, 0.09), jumpDelay: 0.1,
       wantAlt: rand(1, 6), altTimer: rand(2, 5), wanderA: rand(0, 6.28),
-      spawnT: 0, spawnDelay: 0, jumpT: 0,
+      spawnT: 0, spawnDelay: 0, jumpT: 0, per: per || 'equilibrado',
     },
   };
 }
@@ -478,7 +504,7 @@ const hats = {};
   for (const k in hats) { hats[k].visible = false; human.mesh.add(hats[k]); }
 }
 function applyHat() { for (const k in hats) hats[k].visible = k === prof.hat && unlocked('hat', k); }
-for (let i = 1; i <= N_BOTS; i++) chars.push(makeChar(NAMES[i][0], NAMES[i][1], false));
+for (let i = 1; i <= N_BOTS; i++) chars.push(makeChar(NAMES[i][0], NAMES[i][1], false, PERSONA_ORDER[(i - 1) % PERSONA_ORDER.length]));
 
 // ---------- Bolas ----------
 const ballGeo = new THREE.SphereGeometry(BR, 28, 18);
@@ -588,7 +614,12 @@ const UNLOCKS = [ // [nível, tipo, id, nome]
 ];
 const TRAILS = { padrao: ['Padrão', 0xdddddd], azul: ['Azul', 0x3aa0ff], arcoiris: ['Arco-íris', 0xffffff], ouro: ['Dourado', 0xffd23f], fogo: ['Fogo', 0xff5a1a] };
 const HATS = { nada: 'Nenhum', festa: 'Festa', coroa: 'Coroa', chifres: 'Chifres', aureola: 'Auréola' };
-let prof = { xp: 0, level: 1, trail: 'padrao', hat: 'nada', skill: 1, games: 0, day: '', missions: [] };
+let prof = { xp: 0, level: 1, trail: 'padrao', hat: 'nada', skill: 1, games: 0, day: '', missions: [], lastDay: '', streak: 0, firstWinDay: '' };
+// patentes por nível (identidade: "sou Canhoneiro")
+const TITLES = [[1, 'Recruta'], [3, 'Artilheiro'], [5, 'Canhoneiro'], [8, 'Ás do Céu'], [12, 'Mestre do Ar'], [18, 'Lenda']];
+const titleOf = l => TITLES.filter(t => l >= t[0]).pop()[1];
+// sequência de dias jogando: +10% de XP por dia seguido (até +50%)
+const xpMult = () => 1 + Math.min(0.5, Math.max(0, (prof.streak || 1) - 1) * 0.1);
 try { prof = Object.assign(prof, JSON.parse(localStorage.getItem('canhao.perfil') || '{}')); } catch (e) {}
 function saveProf() { try { localStorage.setItem('canhao.perfil', JSON.stringify(prof)); } catch (e) {} }
 // perfil salvo corrompido ou de versão antiga: volta ao padrão sem quebrar
@@ -613,13 +644,25 @@ function ensureMissions() {
   saveProf();
 }
 ensureMissions();
+function updateStreak() {
+  const t = today();
+  if (prof.lastDay === t) return;
+  const y = new Date(Date.now() - 864e5);
+  const ys = y.getFullYear() + '-' + (y.getMonth() + 1) + '-' + y.getDate();
+  prof.streak = prof.lastDay === ys ? (prof.streak || 0) + 1 : 1;
+  prof.lastDay = t; saveProf();
+}
+updateStreak();
 let roundXP = 0, roundStats = {}, survXP = 0, summary = '';
 function gainXP(n) {
+  n *= xpMult();
   roundXP += n; prof.xp += n;
   while (prof.xp >= xpNeed(prof.level)) {
     prof.xp -= xpNeed(prof.level); prof.level++;
     const un = UNLOCKS.filter(u => u[0] === prof.level).map(u => u[3]);
-    announce(`NÍVEL ${prof.level}!`, '#7fffb0', 1.6);
+    const novo = TITLES.find(tt => tt[0] === prof.level);
+    announce(novo ? `${novo[1].toUpperCase()}!` : `NÍVEL ${prof.level}!`, '#7fffb0', 1.6);
+    if (novo) log(`🎖️ Nova patente: ${novo[1]}`);
     log(`⭐ Nível ${prof.level}${un.length ? ' · desbloqueou: ' + un.join(', ') : ''}`);
     tone(523, 1046, 0.3, 0.1); tone(784, 1568, 0.4, 0.07, 'triangle');
   }
@@ -655,8 +698,12 @@ function renderMeta() {
   const el = document.getElementById('meta');
   if (!el) return;
   ensureMissions();
-  el.innerHTML = `<b>Nível ${prof.level}</b> · ${prof.xp}/${xpNeed(prof.level)} XP` +
+  updateStreak();
+  const winOk = prof.firstWinDay === today();
+  el.innerHTML = `<b>Nível ${prof.level} · ${titleOf(prof.level)}</b> · ${Math.floor(prof.xp)}/${xpNeed(prof.level)} XP` +
     `<div class="xpbar"><i style="width:${(100 * prof.xp / xpNeed(prof.level)).toFixed(0)}%"></i></div>` +
+    `🔥 <b>${prof.streak || 1}</b> dia(s) seguido(s) · XP x${xpMult().toFixed(1)}` +
+    ` · 🎁 1ª vitória do dia: ${winOk ? '<b>já pegou</b> ✓' : '<b style="color:#ffd23f">+100 XP</b>'}<br>` +
     `<b>Missões de hoje</b> <small>(+60 XP cada)</small><br>${missionsHTML()}`;
   const nx = UNLOCKS.find(u => u[0] > prof.level);
   document.getElementById('nextUnlock').textContent = nx ? `Próximo prêmio: ${nx[3]} no nível ${nx[0]}` : 'Tudo desbloqueado!';
@@ -771,6 +818,51 @@ function playStep(s, t) {
 let popColor = '#ffd23f', slowT = 0;
 function announce(text, color = '#ffd23f', t = 1.0) { popText = text; popColor = color; popT = t; }
 function slowmo(t) { slowT = Math.max(slowT, t); }
+// hitmarker: X na mira por um instante quando sua bola acerta (vermelho se derrubou)
+let hitT = 0, hitKill = false, toastT = 0;
+function hitMarker(kill) {
+  hitT = kill ? 0.32 : 0.14; hitKill = kill;
+  if (kill) tone(1400, 700, 0.14, 0.12, 'square'); else tone(2400, 1900, 0.05, 0.09);
+}
+// aviso pequeno logo abaixo da mira (eventos menores, sem roubar o centro da tela)
+function toast(text, color = '#ffffff') {
+  const el = document.getElementById('toast');
+  el.textContent = text; el.style.color = color; toastT = 0.9;
+}
+// raspão: tiro inimigo passou a menos de ~1 m e não te pegou
+function checkNearMiss() {
+  if (!human.alive || state !== 'play') return;
+  for (const b of balls) {
+    if (b.owner === human || b.nearDone || b.vel.lengthSq() < 400) continue;
+    const rel = new V3().subVectors(human.pos, b.pos);
+    const gap = rel.length() - human.r - b.r;
+    if (gap < 1.1) b.nearClose = true;
+    else if (b.nearClose && rel.dot(b.vel) < 0) {
+      b.nearDone = true;
+      if (human.hitBall === b || human.dashT > 0) continue;
+      toast('RASPOU! +2 XP', '#7fe3ff'); gainXP(2);
+      shake = Math.max(shake, 0.12);
+      if (noiseBuf) noise(actx.currentTime, 0.28, 0.3, actx.destination, 'bandpass', 1100);
+      else tone(900, 300, 0.2, 0.06, 'triangle');
+    }
+  }
+}
+// mira assistida: inimigo dentro de um cone pequeno em volta da mira → mira onde
+// ele vai estar quando a bola chegar (antecipação). O cone abre um pouco com a distância.
+function aimAssist(origin, dir, from) {
+  let best = null, bestOff = Infinity;
+  for (const c of chars) {
+    if (c === human || !c.alive) continue;
+    const oc = c.pos.clone().sub(origin);
+    const t = oc.dot(dir);
+    if (t < 3 || t > 48) continue;
+    const off = Math.sqrt(Math.max(0, oc.lengthSq() - t * t));
+    if (off < c.r + 0.5 + t * 0.05 && off < bestOff) { bestOff = off; best = c; }
+  }
+  if (!best) return null;
+  const tt = best.pos.distanceTo(from) / BALL_SPEED;
+  return { c: best, p: best.pos.clone().addScaledVector(best.vel, tt * 0.9) };
+}
 let records = { combo: 0, tempo: 0, kills: 0 };
 try { records = Object.assign(records, JSON.parse(localStorage.getItem('canhao.recordes') || '{}')); } catch (e) {}
 function saveRecords() { try { localStorage.setItem('canhao.recordes', JSON.stringify(records)); } catch (e) {} }
@@ -890,7 +982,7 @@ function stomp(top, bot) {
   const k = clamp(top.size / bot.size, 0.6, 2);
   bot.vel.y = Math.min(bot.vel.y, 0) - 13 * k;
   impactFx(bot, bot.pos.clone().lerp(top.pos, 0.5), new V3(0, -1, 0), 0.7, 0xffd23f, top.human, true);
-  if (top.human) { announce('PISÃO!', '#ffd23f', 0.8); stat('stomp'); }
+  if (top.human) { announce('PISÃO!', '#ffd23f', 0.8); stat('stomp'); hitMarker(false); }
   else if (bot.human) announce('PISARAM EM VOCÊ', '#ff6b6b', 0.8);
 }
 // escudo absorve uma pancada
@@ -987,7 +1079,7 @@ function killChar(c) {
   breakCombo(c);
   if (c.human && mode === 'classico' && playT > records.tempo) { records.tempo = playT; saveRecords(); }
   if (killer) {
-    if (killer.human) stat('kill');
+    if (killer.human) { stat('kill'); hitMarker(true); }
     killer.kills++; killer.streak++; setSize(killer);
     log(`${nm(killer)} derrubou ${nm(c)}`);
     if (killer.alive) growFx(killer);
@@ -1152,7 +1244,8 @@ function physics(dt) {
           const k = clamp((into - DRAG_MIN) / 70, 0, 1); // 45 m/s ≈ 0.36 · carga cheia ≈ 1
           const v = bl.vel.clone().multiplyScalar(dragShare() * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
           pc.vel.copy(v); bl.vel.copy(v);
-          pc.dragB = bl; pc.dragT = 0.16 + 0.24 * k + (bl.perfect ? 0.08 : 0);
+          pc.dragB = bl; pc.dragT = 0.16 + 0.24 * k + (bl.perfect ? 0.08 : 0); pc.hitBall = bl;
+          if (bl.owner.human && !pc.human) hitMarker(false);
           pc.groundBody = null; pc.groundTime = 1; pc.surfaceWindow = 0;
           hitFx(pc, bl, k);
           continue;
@@ -1248,26 +1341,36 @@ function botThink(p, dt) {
   const mv = new V3(Math.cos(ai.wanderA), 0, Math.sin(ai.wanderA)).multiplyScalar(0.4);
   const h = Math.hypot(p.pos.x, p.pos.z);
   if (h > 1) mv.add(new V3(-p.pos.x / h, 0, -p.pos.z / h).multiplyScalar(clamp((h - 5) / 8, 0, 1.5)));
-  let ed = Infinity;
+  const per = ai.per;
+  let ed = Infinity, diving = false;
   if (enemy) {
     tmp.subVectors(enemy.pos, p.pos); tmp.y = 0; ed = tmp.length();
-    if (ed > 0.1 && ed < 15) mv.addScaledVector(tmp.normalize(), ai.aggr * 0.7);
+    const dir = tmp.clone().normalize();
+    // Atirador: mantém distância (afasta quando chega perto demais)
+    const w = per === 'atirador' && ed < 9 ? -0.9 : ai.aggr * 0.7;
+    if (ed > 0.1 && ed < 15) mv.addScaledVector(dir, w);
+    // Pisador: inimigo abaixo e perto → se posiciona em cima e cai nele
+    const dy = p.pos.y - enemy.pos.y;
+    if (per === 'pisador' && dy > 0.8 && dy < 8 && ed < 7) {
+      mv.addScaledVector(dir, 1.6);
+      diving = ed < 1.6 && p.pos.y - killY > 10;
+    }
   }
-  // orbe por perto: vai atrás (e ajusta a altura para alcançar)
-  let orb = null, od = 14;
+  // orbe por perto: vai atrás (e ajusta a altura para alcançar). O Caçador enxerga longe.
+  let orb = null, od = per === 'cacador' ? 26 : 14;
   for (const o of orbs) {
     const dh = Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z);
-    if (dh < od && Math.abs(o.pos.y - p.pos.y) < 9) { od = dh; orb = o; }
+    if (dh < od && Math.abs(o.pos.y - p.pos.y) < (per === 'cacador' ? 14 : 9)) { od = dh; orb = o; }
   }
-  if (orb) {
+  if (orb && !diving) {
     tmp.set(orb.pos.x - p.pos.x, 0, orb.pos.z - p.pos.z);
-    if (od > 0.3) mv.addScaledVector(tmp.normalize(), 1.2);
+    if (od > 0.3) mv.addScaledVector(tmp.normalize(), per === 'cacador' ? 2 : 1.2);
     ai.wantAlt = clamp(orb.pos.y, -12, 8);
   }
-  // esquiva: tiro vindo direto, às vezes dá dash para o lado
+  // esquiva: tiro vindo direto, às vezes dá dash para o lado (o Esquivo quase sempre)
   ai.dodgeCheck = (ai.dodgeCheck || 0) - dt;
   if (p.dashCd <= 0 && ai.dodgeCheck <= 0) {
-    ai.dodgeCheck = 0.12;
+    ai.dodgeCheck = per === 'esquivo' ? 0.06 : 0.12;
     for (const b of balls) {
       if (b.owner === p) continue;
       const rel = p.pos.clone().sub(b.pos), v = b.vel.clone().sub(p.vel), v2 = v.lengthSq();
@@ -1275,7 +1378,7 @@ function botThink(p, dt) {
       const t = rel.dot(v) / v2;
       if (t <= 0 || t > 0.35) continue;
       if (rel.addScaledVector(v, -t).length() > 1.6) continue;
-      if (Math.random() < 0.25 + ai.aggr * 0.5) dash(p, new V3(v.z, 0, -v.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1));
+      if (Math.random() < (per === 'esquivo' ? 0.85 : 0.25 + ai.aggr * 0.5)) dash(p, new V3(v.z, 0, -v.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1));
       break;
     }
   }
@@ -1285,8 +1388,10 @@ function botThink(p, dt) {
 
   // disparar: bola na direção do inimigo + arremesso pra cima
   const g = grounded(p);
-  const need = !g && p.vel.y < -1 && (p.pos.y < ai.wantAlt || p.vel.y < -9);
-  const attack = enemy && ed < 20 && p.vel.y < 4 && Math.random() < ai.aggr * dt * 1.5;
+  // mergulhando no pisão: não solta bola embaixo (cairia nela em vez de cair no inimigo)
+  const need = !diving && !g && p.vel.y < -1 && (p.pos.y < ai.wantAlt || p.vel.y < -9);
+  const attack = !diving && enemy && ed < (per === 'atirador' ? 28 : 20) && p.vel.y < 4 &&
+    Math.random() < ai.aggr * dt * (per === 'atirador' ? 2.4 : per === 'esquivo' ? 0.9 : 1.5);
   if ((need || attack) && p.cd <= 0) {
     ai.spawnT += dt;
     if (ai.spawnT >= ai.spawnDelay) {
@@ -1297,7 +1402,8 @@ function botThink(p, dt) {
         aim.x += rand(-1.5, 1.5) / (ai.aggr * 3); aim.z += rand(-1.5, 1.5) / (ai.aggr * 3);
       } else aim = mv.clone();
       // no ataque, às vezes manda um tiro carregado
-      spawnUnder(p, aim, attack && !need && Math.random() < 0.5 ? rand(0.3, 1) * ai.aggr * 1.6 : 0);
+      const chargeChance = per === 'atirador' ? 0.85 : 0.5;
+      spawnUnder(p, aim, attack && !need && Math.random() < chargeChance ? rand(0.3, 1) * (per === 'atirador' ? 1.4 : ai.aggr * 1.6) : 0);
       ai.spawnT = 0;
       ai.spawnDelay = Math.random() < ai.miss ? rand(0.3, 0.7) : rand(0, ai.react);
     }
@@ -1325,7 +1431,12 @@ addEventListener('keydown', e => {
   if (!started || paused) return;
   if (UNDER_KEYS.includes(e.code) && !e.repeat) startCharge();
   // buffer de 0,12 s: Espaço apertado um pouco antes da hora ainda vale
-  if (e.code === 'Space' && !e.repeat) human.wantJump = 0.12;
+  if (e.code === 'Space' && !e.repeat) {
+    human.wantJump = 0.12;
+    // menos espera: Espaço pula o resumo, ou encerra a rodada se você já caiu
+    if (state === 'end' && stateT > 1) resetRound();
+    else if (state === 'play' && !human.alive && mode === 'classico') { winnerText = 'Próxima!'; endRound(false); }
+  }
   if ((e.code === 'KeyQ' || e.code === 'KeyE') && !e.repeat) human.wantDash = 0.1;
   if (e.code === 'KeyR' && !e.repeat) resetRound();
   if (e.code === 'KeyN' && !e.repeat) toggleMusic();
@@ -1452,12 +1563,16 @@ function humanInput(dt) {
 
   // Mira: ponto do mundo sob a mira (centro da tela). A bola vai na direção dele.
   const camDir = new V3(); camera.getWorldDirection(camDir);
-  const aimPoint = aimTarget(camera.position, camDir);
+  // a bola nasce embaixo de você: a direção sai desse ponto, não do centro do boneco
+  const from = human.pos.clone(); from.y -= human.r + BR * 0.6;
+  const assist = aimAssist(camera.position, camDir, from);
+  human.lockOn = assist ? assist.c : null;
+  const aimPoint = assist ? assist.p : aimTarget(camera.position, camDir);
 
   // Shift/C/↓/clique: uma ação só — bola disparada na mira + arremesso pra cima
   if (human.charging) human.chargeT = Math.min(CHARGE_MAX, human.chargeT + dt);
   if (human.wantUnder > 0) {
-    const d = aimPoint.clone().sub(human.pos);
+    const d = aimPoint.clone().sub(from);
     if (spawnUnder(human, d, human.pendingCharge)) { human.wantUnder = 0; human.pendingCharge = 0; }
     else human.wantUnder -= dt;
   }
@@ -1510,6 +1625,11 @@ function endRound(won) {
   state = 'end'; stateT = 0; slowmo(1.2);
   rounds++;
   if (won) stat('win');
+  if (won && prof.firstWinDay !== today()) {
+    prof.firstWinDay = today(); gainXP(100);
+    log('🎁 1ª vitória do dia: +100 XP');
+    setTimeout(() => announce('1ª VITÓRIA DO DIA! +100 XP', '#ffd23f', 1.6), 900);
+  }
   if (human.alive && mode === 'classico') stat('tempo', playT);
   const lived = human.alive ? playT : (human.diedAt || playT);
   if (won) prof.skill = Math.min(1.6, prof.skill + 0.08);
@@ -1522,7 +1642,7 @@ function endRound(won) {
   if (cm > 0 && cm < records.combo && records.combo - cm <= 6) close = `Faltaram só ${records.combo - cm} para o seu recorde de combo (x${records.combo})!`;
   else if (mode === 'classico' && !won && lived < records.tempo && records.tempo - lived <= 10) close = `Faltaram ${(records.tempo - lived).toFixed(0)} s para o seu recorde no ar!`;
   summary = `Combo máx <b>x${cm}</b> · ${rs.kill || 0} derrubadas · ${rs.perfect || 0} perfeitas · ${rs.dodge || 0} esquivas · ${rs.stomp || 0} pisões<br>` +
-    `<b style="color:#7fffb0">+${roundXP} XP</b> · Nível ${prof.level} (${prof.xp}/${xpNeed(prof.level)})` +
+    `<b style="color:#7fffb0">+${Math.round(roundXP)} XP</b>${xpMult() > 1 ? ` <small>(🔥 x${xpMult().toFixed(1)})</small>` : ''} · Nível ${prof.level} ${titleOf(prof.level)} (${Math.floor(prof.xp)}/${xpNeed(prof.level)})` +
     (close ? `<br><span style="color:#ffd23f">${close}</span>` : '');
 }
 function updateState(dt) {
@@ -1623,7 +1743,10 @@ const hud = {
   pw: document.getElementById('pw'), dash: document.getElementById('dash'),
   mod: document.getElementById('mod'),
 };
-let acc = 0, last = performance.now();
+let acc = 0, last = performance.now(), ffwd = false, fov = 70;
+const lookAhead = new V3();
+const speedEl = document.getElementById('speed'), crossEl = document.getElementById('cross');
+const hitEl = document.getElementById('hitmark'), toastEl = document.getElementById('toast');
 
 function frame(now) {
   requestAnimationFrame(frame);
@@ -1631,7 +1754,9 @@ function frame(now) {
   if (started && !paused) {
     // câmera lenta: o jogo inteiro roda a 30% por um instante
     slowT = Math.max(0, slowT - dt);
-    const gdt = dt * (slowT > 0 ? 0.3 : 1);
+    // você caiu no Clássico: o resto da rodada roda acelerado (menos espera)
+    ffwd = !human.alive && mode === 'classico' && state === 'play';
+    const gdt = dt * (slowT > 0 ? 0.3 : ffwd ? 2.2 : 1);
     humanInput(gdt);
     for (const c of chars) {
       c.cd = Math.max(0, c.cd - gdt); c.jumpCd = Math.max(0, c.jumpCd - gdt);
@@ -1656,6 +1781,7 @@ function frame(now) {
       if (n === 8) acc = 0;
     }
     reloadT = Math.max(0, reloadT - dt);
+    checkNearMiss();
     // rastro de fumaça atrás de quem está sendo arrastado
     for (const c of chars) {
       if (!c.dragB) continue;
@@ -1740,9 +1866,21 @@ function frame(now) {
   let target = human;
   if (!human.alive) target = (human.killedBy && human.killedBy.alive ? human.killedBy : chars.find(c => c.alive)) || human;
   camFocus.lerp(target.pos, 1 - Math.exp(-12 * dt));
+  // look-ahead: a câmera adianta um pouco para onde você está indo
+  const la = new V3(target.vel.x, 0, target.vel.z).multiplyScalar(0.07);
+  if (la.length() > 1.2) la.setLength(1.2);
+  lookAhead.lerp(la, 1 - Math.exp(-3 * dt));
+  // FOV abre com a velocidade (sensação de velocidade); fechado no arrasto não, abre mais
+  const spd = target.vel.length();
+  const fovT = 70 + 9 * clamp((spd - 12) / 22, 0, 1) + (target.dragB ? 5 : 0) + (slowT > 0 ? -4 : 0);
+  fov += (fovT - fov) * (1 - Math.exp(-6 * dt));
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  // linhas de velocidade nas bordas quando está muito rápido
+  speedEl.style.opacity = (human.alive ? clamp((spd - 20) / 18, 0, 0.75) : 0).toFixed(2);
+  if (spd > 20) speedEl.style.transform = `rotate(${rand(0, 6).toFixed(1)}deg)`;
   // câmera se afasta quando você cresce
   const dist = 7.5 * (0.55 + 0.45 * target.size), cp = Math.cos(camPitch);
-  const look = new V3(camFocus.x, camFocus.y + 0.8, camFocus.z);
+  const look = new V3(camFocus.x + lookAhead.x, camFocus.y + 0.8, camFocus.z + lookAhead.z);
   camera.position.set(look.x + Math.sin(camYaw) * cp * dist, look.y + Math.sin(camPitch) * dist, look.z + Math.cos(camYaw) * cp * dist);
   camera.lookAt(look);
   // tremor da câmera na pancada
@@ -1772,6 +1910,14 @@ function frame(now) {
       tone(392, 784, 0.25, 0.1); tone(587, 1174, 0.3, 0.07, 'triangle');
     }
   }
+  // mira travada, hitmarker e aviso pequeno
+  crossEl.classList.toggle('lock', !!human.lockOn && human.alive);
+  hitT = Math.max(0, hitT - dt); toastT = Math.max(0, toastT - dt);
+  hitEl.style.opacity = hitT > 0 ? 1 : 0;
+  hitEl.classList.toggle('kill', hitKill);
+  hitEl.style.transform = `scale(${(1 + hitT * 2).toFixed(2)})`;
+  toastEl.style.opacity = Math.min(1, toastT * 3).toFixed(2);
+  toastEl.style.transform = `translateY(${(-(0.9 - toastT) * 22).toFixed(0)}px)`;
   // rastro arco-íris muda de cor sem parar
   if (skinTrailMats.arcoiris) skinTrailMats.arcoiris.color.setHSL((clock * 0.4) % 1, 1, 0.6);
   updateThreats();
@@ -1792,7 +1938,7 @@ function frame(now) {
     `Até o fim: <b style="color:${toEnd < 10 ? '#ff6b6b' : 'inherit'}">${Math.max(0, toEnd).toFixed(0)} m</b><br>` +
     `Tempo: <b>${playT.toFixed(0)}s</b><br>` +
     `Vitórias: <b>${wins}</b> de ${rounds}` +
-    `<br>Nível <b>${prof.level}</b> <small>(${prof.xp}/${xpNeed(prof.level)} XP)</small>` +
+    `<br>Nível <b>${prof.level}</b> ${titleOf(prof.level)} <small>(${Math.floor(prof.xp)}/${xpNeed(prof.level)} XP)</small>` +
     (sudden ? `<br><span style="color:#ff8c8c">Morte súbita: o limite está subindo</span>` : '');
   // modificador da rodada (com seta do vento relativa à câmera)
   if (mod !== 'normal') {
@@ -1826,9 +1972,9 @@ function frame(now) {
       : 'A plataforma vai sumir — prepare o canhão';
   }
   else if (state === 'play' && stateT < 0.8) center = 'VAI!';
-  else if (state === 'end') { center = winnerText; sub = summary || 'Próxima rodada já já…'; }
+  else if (state === 'end') { center = winnerText; sub = (summary || 'Próxima rodada já já…') + (stateT > 1 ? '<br><small style="opacity:.7">Espaço: próxima rodada</small>' : ''); }
   else if (!human.alive && mode === 'renascer') sub = `${byLine}Renascendo em ${Math.max(0, human.respawnT).toFixed(1)} s${tipLine}`;
-  else if (!human.alive) sub = `${byLine}Você durou ${(human.diedAt || 0).toFixed(0)} s · R pula para a próxima rodada${tipLine}`;
+  else if (!human.alive) sub = `${byLine}Você durou ${(human.diedAt || 0).toFixed(0)} s · ⏩ acelerado · Espaço: próxima rodada${tipLine}`;
   if (!center && popT > 0) center = popText;
   hud.center.textContent = center; hud.sub.innerHTML = sub;
   hud.center.style.color = !center || center !== popText ? '' : popColor;
