@@ -28,6 +28,13 @@
   #modes button{flex:1;padding:10px;border-radius:10px;border:2px solid #fff3;background:#fff1;color:#fff;font:600 16px system-ui,sans-serif;cursor:pointer}
   #modes button small{display:block;font-weight:400;font-size:12px;opacity:.75;margin-top:3px}
   #modes button.on{border-color:#ffcc33;background:#ffcc3322}
+  #combo{position:absolute;bottom:92px;width:100%;text-align:center;font-weight:800;font-size:30px;line-height:1;opacity:0;transition:opacity .15s}
+  #combo small{display:block;font-size:12px;font-weight:600;letter-spacing:1px;margin-top:2px}
+  #combobar{width:120px;height:4px;margin:4px auto 0;background:#0006;border-radius:2px;overflow:hidden}
+  #combobar i{display:block;height:100%;background:#fff}
+  #dash{position:absolute;bottom:42px;left:calc(50% + 132px);font-size:13px;font-weight:700}
+  #pw{position:absolute;bottom:150px;width:100%;text-align:center;font-size:14px;font-weight:700}
+  #pw span{display:inline-block;margin:0 6px;padding:2px 8px;border-radius:8px;background:#0006}
   .threat{position:absolute;left:50%;top:50%;width:0;height:0;margin:-13px 0 0 -14px;
     border-left:14px solid transparent;border-right:14px solid transparent;border-bottom:26px solid #ffb347;
     opacity:0;filter:drop-shadow(0 0 3px #000)}
@@ -43,7 +50,10 @@
   <div id="cross"></div>
   <div id="cdlabel">Canhão</div>
   <div id="cdwrap"><div id="cdfill"></div><div id="cdzone"></div></div>
-  <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · combo: Espaço, S, Espaço, S… · R reiniciar · Esc pausa</div>
+  <div id="combo"><span id="comboN"></span><small id="comboTier"></small><div id="combobar"><i id="comboFill"></i></div></div>
+  <div id="pw"></div>
+  <div id="dash"></div>
+  <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · Q/E dash · combo: Espaço, S, Espaço, S… · R reiniciar · Esc pausa</div>
 </div>
 <div id="overlay"><div class="box">
   <h1 id="ovTitle">Canhão no Ar 3D</h1>
@@ -54,7 +64,12 @@
     <li>Combo: <kbd>Espaço</kbd> <kbd>S</kbd> <kbd>Espaço</kbd> <kbd>S</kbd>… · <kbd>R</kbd> reiniciar</li>
     <li>Segure <kbd>S</kbd> para carregar: a bola sai até 2x mais rápida, mas você cai enquanto carrega</li>
     <li>Quanto mais alto, mais pesada a gravidade; lá embaixo ela alivia</li>
+    <li><b>Ritmo:</b> cada pulo na sua bola soma combo. 5 = Bom ritmo · 12 = Em chamas (bola mais rápida) · 25 = Imparável. Ficou parado, perde.</li>
+    <li><b>Recarga perfeita:</b> aperte S de novo quando a barra passar pela faixa branca</li>
+    <li><kbd>Q</kbd>/<kbd>E</kbd> dash: atravessa tiros. Esquivar no último instante = câmera lenta e dash de volta</li>
+    <li>Caia em cima de alguém = <b>Pisão</b>. Pegue os orbes no ar: Triplo, Gigante, Pena, Escudo, Turbo</li>
   </ul>
+  <p id="records" style="margin:6px 0 0;opacity:.85;font-size:14px"></p>
   <div id="modes">
     <button data-mode="classico" class="on">Clássico<small>último no ar vence</small></button>
     <button data-mode="renascer">Renascer<small>renasce ao vivo · quem derruba cresce · 10 kills vence</small></button>
@@ -86,6 +101,26 @@ const PERFECT_SPEED = 1.2; // tiro perfeito: bola 20% mais rápida (rebote ~44% 
 // Arrasto: bola rápida que acerta alguém leva o boneco junto por um instante
 const DRAG_MIN = 20;      // velocidade mínima da bola para arrastar (m/s)
 const DRAG_SHARE = 0.36;  // fração da velocidade da bola que o boneco ganha
+// Ritmo: cada pulo na própria bola soma combo; parar de pular por COMBO_WINDOW zera
+const COMBO_WINDOW = 1.4;
+const TIERS = [ // [combo mínimo, nome, cor, bônus de velocidade da bola, multiplicador da recarga]
+  [0, '', '#ffffff', 1, 1],
+  [5, 'BOM RITMO', '#7fe3ff', 1.05, 1],
+  [12, 'EM CHAMAS', '#ff9a2a', 1.12, 0.92],
+  [25, 'IMPARÁVEL', '#ff3df0', 1.22, 0.82],
+];
+const tierOf = c => { let t = 0; for (let i = 0; i < TIERS.length; i++) if ((c.combo || 0) >= TIERS[i][0]) t = i; return t; };
+const STOMP_MIN = 7;      // velocidade de queda (relativa) para o pisão (m/s)
+const DASH_SPEED = 17, DASH_CD = 2.2, DASH_T = 0.22;
+// Power-ups (orbes no ar): [nome, cor, duração s, emoji]
+const PW = {
+  triplo: ['TIRO TRIPLO', 0x33e0ff, 7, '🔱'],
+  gigante: ['BOLA GIGANTE', 0xb14dff, 7, '🟣'],
+  pena: ['PENA', 0xf4f4f4, 6, '🪶'],
+  escudo: ['ESCUDO', 0x59ffa0, 12, '🛡️'],
+  turbo: ['TURBO', 0xff7a1a, 6, '⚡'],
+};
+const PW_KEYS = Object.keys(PW);
 const SURFACE_WINDOW = 0.2; // tempo para pular depois de soltar a bola (s)
 const BALL_LIFE = 3;      // tempo de vida da bola (s)
 const BALL_MASS = 1.6;
@@ -198,7 +233,9 @@ function updateLavaParts(dt) {
   for (const p of lavaParts.slice()) {
     p.t += dt;
     const k = p.t / p.life;
-    if (p.ring) {
+    if (p.ghost) {
+      p.m.material.opacity = 0.45 * (1 - k);
+    } else if (p.ring) {
       p.m.scale.setScalar(0.4 + Math.sqrt(k) * p.r1);
       p.m.material.opacity = 0.9 * (1 - k);
     } else if (p.flash) {
@@ -214,9 +251,10 @@ function updateLavaParts(dt) {
       p.m.position.addScaledVector(p.v, dt);
       p.m.scale.setScalar(p.s * Math.max(0.05, 1 - k));
     }
-    if (p.t >= p.life || (!p.flash && !p.column && !p.ring && p.m.position.y < KILL_Y - 1)) {
+    const fixed = p.flash || p.column || p.ring || p.ghost;
+    if (p.t >= p.life || (!fixed && p.m.position.y < KILL_Y - 1)) {
       scene.remove(p.m);
-      if (p.flash || p.column || p.ring) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
+      if (fixed) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
       lavaParts.splice(lavaParts.indexOf(p), 1);
     }
   }
@@ -288,8 +326,29 @@ let hitstop = 0, shake = 0;
 const sparkMats = [0xffffff, 0xfff1a8, 0xffd23a].map(c => new THREE.MeshBasicMaterial({ color: c, fog: false }));
 const shockGeo = new THREE.TorusGeometry(1, 0.06, 8, 40);
 function hitFx(c, b, k) {
-  const dir = b.vel.clone().normalize();
-  const pt = c.pos.clone().lerp(b.pos, 0.5);
+  const color = b.perfect ? 0xffd23f : b.charged ? 0xff4040 : 0xffffff;
+  impactFx(c, c.pos.clone().lerp(b.pos, 0.5), b.vel.clone().normalize(), k, color, b.owner.human, b.perfect);
+}
+function sparks(pt, dir, k, color) {
+  const n = 12 + Math.round(18 * k);
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(partGeo, sparkMats[i % 3]);
+    const s = rand(0.05, 0.14);
+    m.scale.setScalar(s); m.position.copy(pt); scene.add(m);
+    const v = new V3(rand(-1, 1), rand(-0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(4, 11)).addScaledVector(dir, rand(2, 10) * k);
+    lavaParts.push({ m, s, v, t: 0, life: rand(0.2, 0.4) });
+  }
+  const flash = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, fog: false }));
+  flash.position.copy(pt); flash.scale.setScalar(0.3); scene.add(flash);
+  lavaParts.push({ m: flash, flash: true, t: 0, life: 0.12 });
+}
+// fantasma translúcido (rastro do dash)
+function ghost(c) {
+  const m = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color: c.color, transparent: true, opacity: 0.45, fog: false, depthWrite: false }));
+  m.position.copy(c.pos); m.scale.setScalar(c.r); scene.add(m);
+  lavaParts.push({ m, ghost: true, t: 0, life: 0.28 });
+}
+function impactFx(c, pt, dir, k, color, byHuman, gold) {
   // faíscas espirrando para a frente do tiro
   const n = 16 + Math.round(22 * k);
   for (let i = 0; i < n; i++) {
@@ -301,12 +360,12 @@ function hitFx(c, b, k) {
     lavaParts.push({ m, s, v, t: 0, life: rand(0.25, 0.5) });
   }
   // clarão
-  const flash = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color: b.perfect ? 0xffd23f : 0xffffff, transparent: true, opacity: 0.85, fog: false }));
+  const flash = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color: gold ? 0xffd23f : 0xffffff, transparent: true, opacity: 0.85, fog: false }));
   flash.position.copy(pt); flash.scale.setScalar(0.3); scene.add(flash);
   lavaParts.push({ m: flash, flash: true, t: 0, life: 0.14 });
   // anel de choque perpendicular ao tiro
   const ring = new THREE.Mesh(shockGeo, new THREE.MeshBasicMaterial({
-    color: b.perfect ? 0xffd23f : b.charged ? 0xff4040 : 0xffffff, transparent: true, opacity: 0.9, fog: false, side: THREE.DoubleSide }));
+    color, transparent: true, opacity: 0.9, fog: false, side: THREE.DoubleSide }));
   ring.position.copy(pt);
   ring.quaternion.setFromUnitVectors(new V3(0, 0, 1), dir);
   scene.add(ring);
@@ -314,10 +373,10 @@ function hitFx(c, b, k) {
   // boneco amassa com a pancada e volta sozinho
   c.mesh.scale.set(c.mesh.scale.x * 1.5, c.mesh.scale.y * 0.55, c.mesh.scale.z * 1.5);
   // congela o jogo por um instante e treme a câmera (forte se envolve você)
-  const me = c.human || b.owner.human;
+  const me = c.human || byHuman;
   if (me) hitstop = Math.max(hitstop, 0.045 + 0.07 * k);
   const near = clamp(1 - pt.distanceTo(camFocus) / 40, 0, 1);
-  shake = Math.max(shake, (c.human ? 0.55 : b.owner.human ? 0.3 : 0.15 * near) * (0.6 + k));
+  shake = Math.max(shake, (c.human ? 0.55 : byHuman ? 0.3 : 0.15 * near) * (0.6 + k));
   boom(pt, true);
   if (near > 0) tone(900 + 500 * k, 140, 0.13, 0.12 * near * (0.5 + k), 'square');
 }
@@ -351,9 +410,15 @@ function makeChar(name, color, human) {
     p.position.set(s * 0.17, 0.14, 0.51); g.add(p);
   }
   if (!human) g.add(nameSprite(name, color));
+  // bolha do escudo (power-up)
+  const shield = new THREE.Mesh(new THREE.SphereGeometry(PR * 1.45, 20, 14),
+    new THREE.MeshBasicMaterial({ color: PW.escudo[1], transparent: true, opacity: 0.28, depthWrite: false }));
+  shield.visible = false; g.add(shield);
   scene.add(g);
   return {
-    kind: 'p', name, color, human, mesh: g, r: PR, im: 1,
+    kind: 'p', name, color, human, mesh: g, r: PR, im: 1, shield,
+    combo: 0, comboT: 0, dashCd: 0, dashT: 0, multiN: 0, multiT: 0,
+    pw: { triplo: 0, gigante: 0, pena: 0, escudo: 0, turbo: 0 },
     pos: new V3(), vel: new V3(), move: new V3(), yaw: 0, targetYaw: 0,
     alive: true, cd: 0, groundTime: 1, groundVel: new V3(), groundBody: null, jumpCd: 0,
     wantUnder: 0, wantFire: 0,
@@ -382,6 +447,9 @@ const trailGeo = new THREE.CylinderGeometry(BR * 0.75, 0.03, 1, 14, 1, true);
 const trailMat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
 const UP = new V3(0, 1, 0);
 const goldBandMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
+// rastro colorido conforme o ritmo de quem atirou
+const tierTrailMats = TIERS.map((t, i) => i < 2 ? trailMat :
+  new THREE.MeshBasicMaterial({ color: t[2], transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
 
 function spawnBall(owner, pos, vel) {
   const m = new THREE.Group();
@@ -390,13 +458,13 @@ function spawnBall(owner, pos, vel) {
   m.position.copy(pos); m.scale.setScalar(0.3);
   scene.add(m);
   // rastro de fumaça atrás da bola, para parecer tiro de canhão
-  const trail = new THREE.Mesh(trailGeo, trailMat);
+  const trail = new THREE.Mesh(trailGeo, tierTrailMats[tierOf(owner)]);
   trail.renderOrder = 2;
   scene.add(trail);
-  const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), life: BALL_LIFE, age: 0 };
+  const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), life: BALL_LIFE, age: 0, big: 1 };
   balls.push(b);
   const mine = balls.filter(x => x.owner === owner);
-  if (mine.length > 6) removeBall(mine[0]);
+  if (mine.length > 9) removeBall(mine[0]);
   addPuff(pos, owner.color);
   boom(pos, owner.human);
   return b;
@@ -414,6 +482,139 @@ function addPuff(pos, color) {
 }
 
 function cdMult() { return mode === 'classico' && playT > 40 ? 1 + (playT - 40) / 25 : 1; }
+
+// ---------- Anúncios, câmera lenta, recordes ----------
+let popColor = '#ffd23f', slowT = 0;
+function announce(text, color = '#ffd23f', t = 1.0) { popText = text; popColor = color; popT = t; }
+function slowmo(t) { slowT = Math.max(slowT, t); }
+let records = { combo: 0, tempo: 0, kills: 0 };
+try { records = Object.assign(records, JSON.parse(localStorage.getItem('canhao.recordes') || '{}')); } catch (e) {}
+function saveRecords() { try { localStorage.setItem('canhao.recordes', JSON.stringify(records)); } catch (e) {} }
+function showRecords() {
+  const el = document.getElementById('records');
+  if (el) el.innerHTML = `🏆 Recordes: combo <b>${records.combo}</b> · tempo no ar <b>${records.tempo.toFixed(0)} s</b> · kills numa rodada <b>${records.kills}</b>`;
+}
+let roundKills = 0, comboRecordShown = false;
+
+// ---------- Ritmo (combo) ----------
+const PENTA = [0, 2, 4, 7, 9];
+function addCombo(p) {
+  const before = tierOf(p);
+  p.combo++; p.comboT = COMBO_WINDOW;
+  const after = tierOf(p);
+  if (!p.human) return;
+  // cada pulo toca uma nota mais aguda (escala pentatônica): o ritmo vira música
+  const i = Math.min(p.combo - 1, 19);
+  const semi = 12 * Math.floor(i / 5) + PENTA[i % 5];
+  tone(330 * 2 ** (semi / 12), 330 * 2 ** (semi / 12) * 1.01, 0.12, 0.05, 'triangle');
+  if (after > before) {
+    announce(TIERS[after][1] + '!', TIERS[after][2], 1.1);
+    tone(523, 1046, 0.25, 0.1); tone(659, 1318, 0.3, 0.07, 'triangle');
+    shake = Math.max(shake, 0.25);
+  }
+  if (p.combo > records.combo && records.combo >= 5 && !comboRecordShown) {
+    comboRecordShown = true; log('🏆 Novo recorde de combo!');
+  }
+  if (p.combo > records.combo) { records.combo = p.combo; saveRecords(); }
+}
+function breakCombo(p) {
+  if (p.human && p.combo >= 5) log(`Combo x${p.combo} perdido`);
+  if (p.human && p.combo >= 5) tone(400, 120, 0.3, 0.07, 'sawtooth');
+  p.combo = 0; p.comboT = 0; comboRecordShown = comboRecordShown && !p.human;
+}
+
+// ---------- Orbes de power-up ----------
+const orbs = [];
+const orbGeo = new THREE.IcosahedronGeometry(0.55, 0);
+let orbTimer = 4;
+function spawnOrb() {
+  const type = PW_KEYS[Math.floor(Math.random() * PW_KEYS.length)];
+  const [label, color] = PW[type];
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(orbGeo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.3, flatShading: true }));
+  g.add(core);
+  const halo = new THREE.Mesh(puffGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false }));
+  halo.scale.setScalar(1.1); g.add(halo);
+  const tag = nameSprite(label, color); tag.position.y = 1.1; tag.scale.set(2.4, 0.6, 1); g.add(tag);
+  const a = rand(0, Math.PI * 2), d = rand(3, 16);
+  const pos = new V3(Math.cos(a) * d, rand(-14, 8), Math.sin(a) * d);
+  g.position.copy(pos); scene.add(g);
+  orbs.push({ type, mesh: g, core, pos, life: 16, t: 0 });
+}
+function removeOrb(o) {
+  const i = orbs.indexOf(o); if (i >= 0) orbs.splice(i, 1);
+  scene.remove(o.mesh);
+  o.mesh.traverse(m => { if (m.material) { if (m.material.map) m.material.map.dispose(); m.material.dispose(); } });
+}
+function updateOrbs(dt) {
+  if (state === 'play') {
+    orbTimer -= dt;
+    if (orbTimer <= 0 && orbs.length < 3) { spawnOrb(); orbTimer = rand(5, 8); }
+  }
+  for (const o of orbs.slice()) {
+    o.t += dt; o.life -= dt;
+    o.mesh.position.set(o.pos.x, o.pos.y + Math.sin(o.t * 2.5) * 0.25, o.pos.z);
+    o.core.rotation.y += dt * 2; o.core.rotation.x += dt * 1.3;
+    o.mesh.visible = o.life > 3 || Math.floor(o.t * 8) % 2 === 0;
+    if (o.life <= 0) { removeOrb(o); continue; }
+    for (const c of chars) {
+      if (!c.alive || c.pos.distanceTo(o.mesh.position) > c.r + 0.9) continue;
+      const [label, color, dur] = PW[o.type];
+      c.pw[o.type] = dur;
+      sparks(o.mesh.position.clone(), UP, 0.6, color);
+      log(`${nm(c)} pegou ${label}`);
+      if (c.human) { announce(label + '!', '#' + color.toString(16).padStart(6, '0'), 1); tone(660, 1320, 0.2, 0.1); tone(990, 1980, 0.25, 0.06, 'triangle'); }
+      removeOrb(o);
+      break;
+    }
+  }
+}
+
+// ---------- Dash ----------
+function dash(p, dir) {
+  if (p.dashCd > 0 || !p.alive || state !== 'play') return false;
+  const d = dir.clone(); d.y = 0;
+  if (d.lengthSq() < 1e-4) d.set(Math.sin(p.yaw), 0, Math.cos(p.yaw));
+  d.normalize();
+  p.vel.x = d.x * DASH_SPEED; p.vel.z = d.z * DASH_SPEED;
+  p.vel.y = Math.max(p.vel.y, -3); // segura a queda um pouquinho
+  p.dashT = DASH_T; p.dashCd = DASH_CD; p.dodged = false;
+  ghost(p);
+  if (p.human) tone(300, 1200, 0.14, 0.06, 'triangle');
+  return true;
+}
+// esquiva perfeita: um tiro inimigo passou raspando durante o dash
+function perfectDodge(p) {
+  p.dodged = true; p.dashCd = 0;
+  addCombo(p);
+  if (p.human) {
+    slowmo(0.5);
+    announce('ESQUIVA!', '#7fe3ff', 0.9);
+    tone(1200, 600, 0.3, 0.08, 'sine');
+  }
+}
+
+// ---------- Pisão ----------
+function stomp(top, bot) {
+  bot.lastHitBy = top; bot.lastHitT = clock;
+  top.vel.y = JUMP * 1.15; top.groundTime = 1; top.surfaceWindow = 0; top.jumpCd = 0.15;
+  addCombo(top);
+  if (shieldBlock(bot)) return;
+  const k = clamp(top.size / bot.size, 0.6, 2);
+  bot.vel.y = Math.min(bot.vel.y, 0) - 13 * k;
+  impactFx(bot, bot.pos.clone().lerp(top.pos, 0.5), new V3(0, -1, 0), 0.7, 0xffd23f, top.human, true);
+  if (top.human) announce('PISÃO!', '#ffd23f', 0.8);
+  else if (bot.human) announce('PISARAM EM VOCÊ', '#ff6b6b', 0.8);
+}
+// escudo absorve uma pancada
+function shieldBlock(c) {
+  if (!(c.pw.escudo > 0)) return false;
+  c.pw.escudo = 0;
+  sparks(c.pos.clone(), UP, 1, PW.escudo[1]);
+  c.protect = Math.max(c.protect, 0.4);
+  if (c.human) { announce('ESCUDO!', '#59ffa0', 0.8); tone(880, 220, 0.25, 0.1, 'square'); }
+  return true;
+}
 
 // ---------- Modos ----------
 // 'classico': último no ar vence. 'renascer': renasce ao vivo, quem derruba cresce,
@@ -482,15 +683,27 @@ function respawn(c) {
   // morrer não zera mais o tamanho: perde metade do que cresceu
   c.streak = Math.floor(c.streak / 2); setSize(c);
   c.lastHitBy = null; c.dragB = null; c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
+  c.combo = 0; c.comboT = 0; c.dashT = 0; c.dashCd = 0;
+  for (const k of PW_KEYS) c.pw[k] = 0;
 }
 function killChar(c) {
   c.alive = false; c.mesh.visible = false;
   lavaBurst(c.pos.x, c.pos.z);
+  breakCombo(c);
+  if (c.human && mode === 'classico' && playT > records.tempo) { records.tempo = playT; saveRecords(); }
   const killer = c.lastHitBy && clock - c.lastHitT < HIT_CREDIT ? c.lastHitBy : null;
   if (killer) {
     killer.kills++; killer.streak++; setSize(killer);
     log(`${nm(killer)} derrubou ${nm(c)}`);
     if (killer.alive) growFx(killer);
+    // multi-kill: derrubadas seguidas em pouco tempo
+    killer.multiN = killer.multiT > 0 ? killer.multiN + 1 : 1; killer.multiT = 4;
+    if (killer.human) {
+      roundKills++;
+      if (roundKills > records.kills) { records.kills = roundKills; saveRecords(); }
+      const names = ['', '', 'DUPLA!', 'TRIPLA!', 'QUÁDRUPLA!', 'MASSACRE!'];
+      if (killer.multiN >= 2) { announce(names[Math.min(5, killer.multiN)], '#ff5af0', 1.2); slowmo(0.35); }
+    }
   } else log(c.human ? 'Você caiu sozinho' : c.name + ' caiu sozinho');
   if (mode === 'renascer') c.respawnT = RESPAWN_TIME;
 }
@@ -514,10 +727,19 @@ function spawnUnder(p, dir, charge = 0) {
   // recarga perfeita (bots acertam de vez em quando)
   const perfect = p.perfectNext || (p.ai && Math.random() < 0.12);
   p.perfectNext = false;
-  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS) * (perfect ? PERFECT_SPEED : 1);
-  const ball = spawnBall(p, pos, d.clone().multiplyScalar(speed));
-  ball.charged = k > 0.25;
-  if (perfect) { ball.perfect = true; ball.mesh.children[1].material = goldBandMat; }
+  const tier = TIERS[tierOf(p)];
+  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS) * (perfect ? PERFECT_SPEED : 1) * tier[3];
+  // tiro triplo: duas bolas extras abertas para os lados
+  const dirs = [d];
+  if (p.pw.triplo > 0) for (const s of [-1, 1]) dirs.push(d.clone().applyAxisAngle(UP, s * 0.22));
+  let ball;
+  for (const dd of dirs) {
+    const bb = spawnBall(p, pos, dd.clone().multiplyScalar(speed));
+    bb.charged = k > 0.25;
+    if (perfect) { bb.perfect = true; bb.mesh.children[1].material = goldBandMat; }
+    if (p.pw.gigante > 0) { bb.big = 1.6; bb.r = BR * 1.6; bb.im = 1 / (BALL_MASS * 2.5); }
+    if (!ball) ball = bb;
+  }
   // Rebote: a explosão embaixo empurra o boneco pra cima com força proporcional
   // à energia do tiro (cresce com o quadrado da velocidade da bola).
   // Tiro normal ≈ +3 m/s, carga cheia (2x a velocidade) ≈ +12 m/s.
@@ -530,7 +752,7 @@ function spawnUnder(p, dir, charge = 0) {
   // mas só por um instante — tem que apertar Espaço logo em seguida
   p.surfaceWindow = SURFACE_WINDOW;
   p.groundBody = null; p.groundVel.set(0, 0, 0);
-  p.cd = p.cdFull = CD * cdMult();
+  p.cd = p.cdFull = CD * cdMult() * tier[4] * (p.pw.turbo > 0 ? 0.5 : 1);
   p.reloadTried = false; p.jammed = false;
   return true;
 }
@@ -545,6 +767,8 @@ function fire(p, dir) {
   return true;
 }
 function jump(p) {
+  // pulo na própria bola (ou na que acabou de soltar) = +1 no ritmo
+  if (state === 'play' && (p.surfaceWindow > 0 || (p.groundBody && p.groundBody.kind === 'b'))) addCombo(p);
   // o pulo soma com o rebote do canhão (se você já está subindo, sobe mais)
   p.vel.y = Math.max(p.vel.y, 0) + JUMP;
   if (p.groundBody && p.groundBody.kind === 'b') p.groundBody.vel.y -= 3;
@@ -578,7 +802,7 @@ function physics(dt) {
     } else {
       c.vel.x *= 1 - 0.3 * dt; c.vel.z *= 1 - 0.3 * dt;
     }
-    c.vel.y = Math.max(-32, c.vel.y + G_PLAYER * gravAt(c.pos.y) * dt);
+    c.vel.y = Math.max(-32, c.vel.y + G_PLAYER * gravAt(c.pos.y) * (c.pw.pena > 0 ? 0.55 : 1) * dt);
     c.contact = false;
   }
   for (const b of balls) {
@@ -619,9 +843,12 @@ function physics(dt) {
       const pc = a.kind === 'p' && b.kind === 'b' ? a : b.kind === 'p' && a.kind === 'b' ? b : null;
       if (pc) {
         const bl = pc === a ? b : a;
+        // no dash você atravessa tiro inimigo
+        if (pc.dashT > 0 && bl.owner !== pc) { if (!pc.dodged) perfectDodge(pc); continue; }
         const toP = pc === a ? -1 : 1; // n aponta de a para b
         const into = (bl.vel.x * n.x + bl.vel.y * n.y + bl.vel.z * n.z) * toP;
         if (bl.owner !== pc && pc.protect <= 0 && !pc.dragB && into > DRAG_MIN) {
+          if (shieldBlock(pc)) { bl.vel.multiplyScalar(-0.45); bl.owner = pc; continue; }
           pc.lastHitBy = bl.owner; pc.lastHitT = clock;
           const k = clamp((into - DRAG_MIN) / 70, 0, 1); // 45 m/s ≈ 0.36 · carga cheia ≈ 1
           const v = bl.vel.clone().multiplyScalar(DRAG_SHARE * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
@@ -636,6 +863,23 @@ function physics(dt) {
       a.pos.addScaledVector(n, -pen * a.im / sum);
       b.pos.addScaledVector(n, pen * b.im / sum);
       const vrel = (b.vel.x - a.vel.x) * n.x + (b.vel.y - a.vel.y) * n.y + (b.vel.z - a.vel.z) * n.z;
+      // pisão: caiu em cima da cabeça de alguém com velocidade
+      if (a.kind === 'p' && b.kind === 'p' && Math.abs(n.y) > 0.6) {
+        const top = n.y < 0 ? a : b, bot = top === a ? b : a;
+        if (top.vel.y - bot.vel.y < -STOMP_MIN && bot.protect <= 0 && top.jumpCd <= 0) { stomp(top, bot); continue; }
+      }
+      // defesa: duas bolas de donos diferentes batendo forte
+      if (a.kind === 'b' && b.kind === 'b' && a.owner !== b.owner && vrel < -25 && !(a.clashT > 0) && !(b.clashT > 0)) {
+        a.clashT = b.clashT = 0.3;
+        const pt = a.pos.clone().lerp(b.pos, 0.5);
+        sparks(pt, n, 0.6, 0xffffff);
+        const near = clamp(1 - pt.distanceTo(camFocus) / 40, 0, 1);
+        if (near > 0) tone(1500, 500, 0.1, 0.08 * near, 'square');
+        if (a.owner.human || b.owner.human) {
+          announce('DEFESA!', '#7fe3ff', 0.7); shake = Math.max(shake, 0.2);
+          if (human.alive) addCombo(human);
+        }
+      }
       if (vrel < 0) {
         const e = (a.kind === 'b' && b.kind === 'b') ? 0.35 : 0.05;
         const jImp = -(1 + e) * vrel / sum;
@@ -672,7 +916,7 @@ function physics(dt) {
     if (c.contact) c.groundTime = 0; else c.groundTime += dt;
   }
   for (const b of balls.slice()) {
-    b.age += dt; b.life -= dt;
+    b.age += dt; b.life -= dt; if (b.clashT > 0) b.clashT -= dt;
     if (b.life <= 0 || b.pos.y < KILL_Y - 5) removeBall(b);
   }
 }
@@ -709,6 +953,32 @@ function botThink(p, dt) {
   if (enemy) {
     tmp.subVectors(enemy.pos, p.pos); tmp.y = 0; ed = tmp.length();
     if (ed > 0.1 && ed < 15) mv.addScaledVector(tmp.normalize(), ai.aggr * 0.7);
+  }
+  // orbe por perto: vai atrás (e ajusta a altura para alcançar)
+  let orb = null, od = 14;
+  for (const o of orbs) {
+    const dh = Math.hypot(o.pos.x - p.pos.x, o.pos.z - p.pos.z);
+    if (dh < od && Math.abs(o.pos.y - p.pos.y) < 9) { od = dh; orb = o; }
+  }
+  if (orb) {
+    tmp.set(orb.pos.x - p.pos.x, 0, orb.pos.z - p.pos.z);
+    if (od > 0.3) mv.addScaledVector(tmp.normalize(), 1.2);
+    ai.wantAlt = clamp(orb.pos.y, -12, 8);
+  }
+  // esquiva: tiro vindo direto, às vezes dá dash para o lado
+  ai.dodgeCheck = (ai.dodgeCheck || 0) - dt;
+  if (p.dashCd <= 0 && ai.dodgeCheck <= 0) {
+    ai.dodgeCheck = 0.12;
+    for (const b of balls) {
+      if (b.owner === p) continue;
+      const rel = p.pos.clone().sub(b.pos), v = b.vel.clone().sub(p.vel), v2 = v.lengthSq();
+      if (v2 < 100) continue;
+      const t = rel.dot(v) / v2;
+      if (t <= 0 || t > 0.35) continue;
+      if (rel.addScaledVector(v, -t).length() > 1.6) continue;
+      if (Math.random() < 0.25 + ai.aggr * 0.5) dash(p, new V3(v.z, 0, -v.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1));
+      break;
+    }
   }
   if (mv.length() > 1) mv.normalize();
   p.move.copy(mv);
@@ -756,6 +1026,7 @@ addEventListener('keydown', e => {
   if (!started || paused) return;
   if (UNDER_KEYS.includes(e.code) && !e.repeat) startCharge();
   if (e.code === 'Space' && !e.repeat) human.wantJump = 0.06;
+  if ((e.code === 'KeyQ' || e.code === 'KeyE') && !e.repeat) human.wantDash = 0.1;
   if (e.code === 'KeyR' && !e.repeat) resetRound();
   if (e.code === 'KeyM' && !e.repeat) setMode(mode === 'classico' ? 'renascer' : 'classico');
 });
@@ -867,6 +1138,12 @@ function humanInput(dt) {
     else human.wantJump -= dt;
   }
 
+  // Dash: na direção das teclas; sem tecla, para a frente da câmera
+  if (human.wantDash > 0) {
+    if (dash(human, mv.lengthSq() > 0.01 ? mv : f)) human.wantDash = 0;
+    else human.wantDash -= dt;
+  }
+
   // Mira: ponto do mundo sob a mira (centro da tela). A bola vai na direção dele.
   const camDir = new V3(); camera.getWorldDirection(camDir);
   const aimPoint = aimTarget(camera.position, camDir);
@@ -896,6 +1173,8 @@ function resetRound() {
     c.wantUnder = c.wantFire = c.wantJump = 0; c.surfaceWindow = 0; c.groundBody = null;
     c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
     c.perfectNext = c.jammed = false; c.reloadTried = true; c.dragB = null;
+    c.combo = 0; c.comboT = 0; c.dashT = 0; c.dashCd = 0; c.multiN = 0; c.multiT = 0;
+    for (const k of PW_KEYS) c.pw[k] = 0;
     c.kills = 0; c.streak = 0; c.lastHitBy = null; c.protect = 0; c.respawnT = 0; setSize(c);
     c.yaw = c.targetYaw = Math.atan2(-c.pos.x, -c.pos.z);
     if (c.ai) { c.ai.spawnT = 0; c.ai.jumpT = 0; c.ai.spawnDelay = rand(0, c.ai.react); }
@@ -903,6 +1182,9 @@ function resetRound() {
   camYaw = Math.atan2(human.pos.x, human.pos.z);
   camFocus.copy(human.pos);
   state = 'countdown'; stateT = 0; playT = 0; feed.length = 0; winnerText = '';
+  for (const o of orbs.slice()) removeOrb(o);
+  orbTimer = 4; roundKills = 0; comboRecordShown = false; slowT = 0; hitstop = 0;
+  showRecords();
 }
 
 function updateState(dt) {
@@ -928,15 +1210,18 @@ function updateState(dt) {
       if (top.kills >= KILL_GOAL) {
         rounds++;
         if (top.human) { wins++; winnerText = 'Você venceu!'; } else winnerText = top.name + ' venceu';
-        state = 'end'; stateT = 0;
+        state = 'end'; stateT = 0; slowmo(1.2);
       }
     } else if (alive.length <= 1) {
       rounds++;
       if (alive.length === 1) {
-        if (alive[0].human) { wins++; winnerText = 'Você venceu!'; }
+        if (alive[0].human) {
+          wins++; winnerText = 'Você venceu!';
+          if (playT > records.tempo) { records.tempo = playT; saveRecords(); }
+        }
         else winnerText = alive[0].name + ' venceu';
       } else winnerText = 'Empate';
-      state = 'end'; stateT = 0;
+      state = 'end'; stateT = 0; slowmo(1.2);
     }
   }
   if (!plat.active) platform.visible = false;
@@ -988,6 +1273,9 @@ const hud = {
   center: document.getElementById('center'), sub: document.getElementById('sub'),
   cd: document.getElementById('cdfill'),
   zone: document.getElementById('cdzone'), label: document.getElementById('cdlabel'),
+  combo: document.getElementById('combo'), comboN: document.getElementById('comboN'),
+  comboTier: document.getElementById('comboTier'), comboFill: document.getElementById('comboFill'),
+  pw: document.getElementById('pw'), dash: document.getElementById('dash'),
 };
 let acc = 0, last = performance.now();
 
@@ -995,18 +1283,28 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (started && !paused) {
-    humanInput(dt);
+    // câmera lenta: o jogo inteiro roda a 30% por um instante
+    slowT = Math.max(0, slowT - dt);
+    const gdt = dt * (slowT > 0 ? 0.3 : 1);
+    humanInput(gdt);
     for (const c of chars) {
-      c.cd = Math.max(0, c.cd - dt); c.jumpCd = Math.max(0, c.jumpCd - dt);
-      c.surfaceWindow = Math.max(0, (c.surfaceWindow || 0) - dt);
-      c.protect = Math.max(0, c.protect - dt);
-      if (c.ai && c.alive) botThink(c, dt);
+      c.cd = Math.max(0, c.cd - gdt); c.jumpCd = Math.max(0, c.jumpCd - gdt);
+      c.surfaceWindow = Math.max(0, (c.surfaceWindow || 0) - gdt);
+      c.protect = Math.max(0, c.protect - gdt);
+      c.dashT = Math.max(0, c.dashT - gdt); c.dashCd = Math.max(0, c.dashCd - gdt);
+      c.multiT = Math.max(0, c.multiT - gdt);
+      for (const k of PW_KEYS) if (c.pw[k] > 0) c.pw[k] = Math.max(0, c.pw[k] - gdt);
+      // ritmo: ficou tempo demais sem pular na bola, perde o combo
+      if (c.combo > 0 && state === 'play') { c.comboT -= gdt; if (c.comboT <= 0) breakCombo(c); }
+      if (c.dashT > 0 && c.alive) { c.ghostT = (c.ghostT || 0) - gdt; if (c.ghostT <= 0) { ghost(c); c.ghostT = 0.04; } }
+      if (c.ai && c.alive) botThink(c, gdt);
     }
-    updateState(dt);
+    updateState(gdt);
+    updateOrbs(gdt);
     // hitstop: o mundo congela um instante na pancada
     if (hitstop > 0) hitstop -= dt;
     else {
-      acc += dt;
+      acc += gdt;
       let n = 0;
       while (acc >= STEP && n < 8) { physics(STEP); acc -= STEP; n++; }
       if (n === 8) acc = 0;
@@ -1057,10 +1355,16 @@ function frame(now) {
     } else if (c.growT > 0) {
       c.bodyMat.emissive.setHex(0xffd23f);
       c.bodyMat.emissiveIntensity = 0.9 * (c.growT / GROW_PULSE);
+    } else if (!c.charging && tierOf(c) >= 2) {
+      // em chamas / imparável: brilha pulsando na cor do ritmo
+      c.bodyMat.emissive.set(TIERS[tierOf(c)][2]);
+      c.bodyMat.emissiveIntensity = 0.35 + 0.25 * Math.sin(clock * 14);
     } else {
       c.bodyMat.emissive.setHex(c.color);
       c.bodyMat.emissiveIntensity = c.charging ? 0.15 + 0.6 * (c.chargeT / CHARGE_MAX) : Math.min(0.35, c.streak * 0.07);
     }
+    c.shield.visible = c.pw.escudo > 0;
+    if (c.shield.visible) c.shield.material.opacity = 0.22 + 0.1 * Math.sin(clock * 6);
   }
   updateGrowFx(dt);
   popT = Math.max(0, popT - dt);
@@ -1071,7 +1375,7 @@ function frame(now) {
       const axis = new V3(b.vel.z, 0, -b.vel.x).normalize();
       b.mesh.rotateOnWorldAxis(axis, sp * dt / BR);
     }
-    let sc = Math.min(1, 0.3 + b.age * 8);
+    let sc = Math.min(1, 0.3 + b.age * 8) * b.big;
     if (b.life < 0.4) sc *= Math.max(0.05, b.life / 0.4);
     b.mesh.scale.setScalar(sc);
     const speed = b.vel.length();
@@ -1149,7 +1453,24 @@ function frame(now) {
   else if (!human.alive) sub = 'Você caiu. Assistindo… (R reinicia)';
   if (!center && popT > 0) center = popText;
   hud.center.textContent = center; hud.sub.textContent = sub;
-  hud.center.style.color = !center || center !== popText ? '' : '#ffd23f';
+  hud.center.style.color = !center || center !== popText ? '' : popColor;
+  // combo / ritmo
+  const ti = tierOf(human);
+  if (human.combo >= 2 && human.alive) {
+    hud.combo.style.opacity = 1;
+    hud.comboN.textContent = 'x' + human.combo;
+    hud.comboN.style.color = TIERS[ti][2];
+    hud.comboTier.textContent = TIERS[ti][1] || 'RITMO';
+    hud.comboTier.style.color = TIERS[ti][2];
+    hud.comboFill.style.width = (100 * clamp(human.comboT / COMBO_WINDOW, 0, 1)).toFixed(0) + '%';
+    hud.comboFill.style.background = TIERS[ti][2];
+    hud.combo.style.transform = `scale(${(1 + 0.25 * clamp((human.comboT - COMBO_WINDOW + 0.12) / 0.12, 0, 1)).toFixed(2)})`;
+  } else hud.combo.style.opacity = 0;
+  // power-ups ativos
+  hud.pw.innerHTML = PW_KEYS.filter(k => human.pw[k] > 0).map(k =>
+    `<span style="color:#${PW[k][1].toString(16).padStart(6, '0')}">${PW[k][3]} ${PW[k][0]} ${k === 'escudo' ? '' : human.pw[k].toFixed(1) + 's'}</span>`).join('');
+  hud.dash.textContent = human.dashCd > 0 ? `Dash ${human.dashCd.toFixed(1)}s` : 'Dash Q/E ✓';
+  hud.dash.style.opacity = human.dashCd > 0 ? 0.45 : 1;
   hud.center.style.transform = popT > 0 && center === popText ? `scale(${(1 + 0.4 * Math.max(0, popT - 0.9) / 0.3).toFixed(2)})` : '';
 
   renderer.render(scene, camera);
