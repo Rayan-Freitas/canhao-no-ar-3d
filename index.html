@@ -35,6 +35,14 @@
   #dash{position:absolute;bottom:42px;left:calc(50% + 132px);font-size:13px;font-weight:700}
   #pw{position:absolute;bottom:150px;width:100%;text-align:center;font-size:14px;font-weight:700}
   #pw span{display:inline-block;margin:0 6px;padding:2px 8px;border-radius:8px;background:#0006}
+  #mod{position:absolute;top:12px;width:100%;text-align:center;font-size:15px;font-weight:700}
+  #meta{margin-top:10px;font-size:14px;line-height:1.5;background:#0003;border-radius:10px;padding:8px 12px}
+  #meta small{opacity:.7}
+  .xpbar{height:6px;background:#0006;border-radius:3px;overflow:hidden;margin:3px 0 8px}
+  .xpbar i{display:block;height:100%;background:#7fffb0}
+  #skin{display:flex;gap:10px;margin-top:10px}
+  #skin button{flex:1;padding:7px;border-radius:9px;border:1px solid #fff3;background:#fff1;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer}
+  #overlay .box{max-height:94vh;overflow:auto}
   .threat{position:absolute;left:50%;top:50%;width:0;height:0;margin:-13px 0 0 -14px;
     border-left:14px solid transparent;border-right:14px solid transparent;border-bottom:26px solid #ffb347;
     opacity:0;filter:drop-shadow(0 0 3px #000)}
@@ -52,8 +60,9 @@
   <div id="cdwrap"><div id="cdfill"></div><div id="cdzone"></div></div>
   <div id="combo"><span id="comboN"></span><small id="comboTier"></small><div id="combobar"><i id="comboFill"></i></div></div>
   <div id="pw"></div>
+  <div id="mod"></div>
   <div id="dash"></div>
-  <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · Q/E dash · combo: Espaço, S, Espaço, S… · R reiniciar · Esc pausa</div>
+  <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · Q/E dash · combo: Espaço, S, Espaço, S… · R reiniciar · N música · Esc pausa</div>
 </div>
 <div id="overlay"><div class="box">
   <h1 id="ovTitle">Canhão no Ar 3D</h1>
@@ -70,6 +79,9 @@
     <li>Caia em cima de alguém = <b>Pisão</b>. Pegue os orbes no ar: Triplo, Gigante, Pena, Escudo, Turbo</li>
   </ul>
   <p id="records" style="margin:6px 0 0;opacity:.85;font-size:14px"></p>
+  <div id="meta"></div>
+  <div id="skin"><button id="btTrail"></button><button id="btHat"></button></div>
+  <p id="nextUnlock" style="margin:4px 0 0;opacity:.7;font-size:12px;text-align:center"></p>
   <div id="modes">
     <button data-mode="classico" class="on">Clássico<small>último no ar vence</small></button>
     <button data-mode="renascer">Renascer<small>renasce ao vivo · quem derruba cresce · 10 kills vence</small></button>
@@ -135,6 +147,7 @@ const KNOCK = 0.55;      // quanto do impacto da bola chega no boneco atingido
 // Abaixo de 0 alivia pouco: y=-14 → x0.87 · perto do limite (y=-28) → x0.75.
 const gravAt = y => y >= 0 ? Math.min(2.2, 1 + y * 0.04) : Math.max(0.75, 1 + y * 0.009);
 const KILL_Y = -28;       // abaixo disso morreu
+let killY = KILL_Y;        // limite atual (sobe na morte súbita do Clássico)
 const PLAT_R = 9;
 const STEP = 1 / 120;
 const N_BOTS = 5;
@@ -207,7 +220,7 @@ const lavaParts = [];
 const partGeo = new THREE.SphereGeometry(1, 8, 6);
 const partMats = [0xffd23a, 0xff7a1a, 0xff3300].map(c => new THREE.MeshBasicMaterial({ color: c, fog: false }));
 function lavaBurst(x, z) {
-  const y = KILL_Y;
+  const y = killY;
   for (let i = 0; i < 70; i++) {
     const m = new THREE.Mesh(partGeo, partMats[i % 3]);
     const s = rand(0.15, 0.6);
@@ -244,7 +257,7 @@ function updateLavaParts(dt) {
     } else if (p.column) {
       const h = 14 * Math.sin(Math.min(1, k) * Math.PI); // sobe e desce
       p.m.scale.set(1 + k, Math.max(0.01, h), 1 + k);
-      p.m.position.y = KILL_Y + h / 2;
+      p.m.position.y = killY + h / 2;
       p.m.material.opacity = 0.8 * (1 - k);
     } else {
       p.v.y -= 35 * dt;
@@ -252,7 +265,7 @@ function updateLavaParts(dt) {
       p.m.scale.setScalar(p.s * Math.max(0.05, 1 - k));
     }
     const fixed = p.flash || p.column || p.ring || p.ghost;
-    if (p.t >= p.life || (!fixed && p.m.position.y < KILL_Y - 1)) {
+    if (p.t >= p.life || (!fixed && p.m.position.y < killY - 1)) {
       scene.remove(p.m);
       if (fixed) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
       lavaParts.splice(lavaParts.indexOf(p), 1);
@@ -435,6 +448,36 @@ function makeChar(name, color, human) {
 
 const human = makeChar(NAMES[0][0], NAMES[0][1], true);
 chars.push(human);
+// Chapéus desbloqueáveis (só visual)
+const hats = {};
+{
+  const gold = new THREE.MeshStandardMaterial({ color: 0xffd23f, metalness: 0.6, roughness: 0.3, emissive: 0x553300, emissiveIntensity: 0.4 });
+  const festa = new THREE.Group();
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.48, 18), new THREE.MeshStandardMaterial({ color: 0xff4fa3, roughness: 0.6 }));
+  cone.position.y = 0.66; festa.add(cone);
+  const pom = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  pom.position.y = 0.92; festa.add(pom);
+  festa.rotation.z = 0.18; hats.festa = festa;
+  const coroa = new THREE.Group();
+  const aro = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.25, 0.14, 20, 1, true), gold);
+  aro.position.y = 0.5; coroa.add(aro);
+  for (let i = 0; i < 5; i++) {
+    const p = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.16, 8), gold);
+    const a = i / 5 * Math.PI * 2;
+    p.position.set(Math.cos(a) * 0.26, 0.64, Math.sin(a) * 0.26); coroa.add(p);
+  }
+  hats.coroa = coroa;
+  const chifres = new THREE.Group();
+  for (const s of [-1, 1]) {
+    const h = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.3, 10), new THREE.MeshStandardMaterial({ color: 0xc81e1e, roughness: 0.4 }));
+    h.position.set(s * 0.22, 0.5, 0.05); h.rotation.z = -s * 0.5; chifres.add(h);
+  }
+  hats.chifres = chifres;
+  const aureola = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.035, 8, 28), new THREE.MeshBasicMaterial({ color: 0xfff1a8 }));
+  aureola.rotation.x = Math.PI / 2; aureola.position.y = 0.82; hats.aureola = aureola;
+  for (const k in hats) { hats[k].visible = false; human.mesh.add(hats[k]); }
+}
+function applyHat() { for (const k in hats) hats[k].visible = k === prof.hat && unlocked('hat', k); }
 for (let i = 1; i <= N_BOTS; i++) chars.push(makeChar(NAMES[i][0], NAMES[i][1], false));
 
 // ---------- Bolas ----------
@@ -450,6 +493,17 @@ const goldBandMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
 // rastro colorido conforme o ritmo de quem atirou
 const tierTrailMats = TIERS.map((t, i) => i < 2 ? trailMat :
   new THREE.MeshBasicMaterial({ color: t[2], transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
+// rastro escolhido pelo jogador (desbloqueado por nível)
+// (criado sob demanda: o perfil só é lido mais abaixo no arquivo)
+const skinTrailMats = {};
+function trailFor(owner) {
+  const ti = tierOf(owner);
+  if (ti >= 2) return tierTrailMats[ti];
+  const k = prof.trail;
+  if (!owner.human || k === 'padrao' || !unlocked('trail', k)) return trailMat;
+  if (!skinTrailMats[k]) skinTrailMats[k] = new THREE.MeshBasicMaterial({ color: TRAILS[k][1], transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide });
+  return skinTrailMats[k];
+}
 
 function spawnBall(owner, pos, vel) {
   const m = new THREE.Group();
@@ -458,7 +512,7 @@ function spawnBall(owner, pos, vel) {
   m.position.copy(pos); m.scale.setScalar(0.3);
   scene.add(m);
   // rastro de fumaça atrás da bola, para parecer tiro de canhão
-  const trail = new THREE.Mesh(trailGeo, tierTrailMats[tierOf(owner)]);
+  const trail = new THREE.Mesh(trailGeo, trailFor(owner));
   trail.renderOrder = 2;
   scene.add(trail);
   const b = { kind: 'b', owner, mesh: m, trail, r: BR, im: 1 / BALL_MASS, pos: pos.clone(), vel: vel.clone(), life: BALL_LIFE, age: 0, big: 1 };
@@ -481,7 +535,237 @@ function addPuff(pos, color) {
   puffs.push({ m, t: 0 });
 }
 
-function cdMult() { return mode === 'classico' && playT > 40 ? 1 + (playT - 40) / 25 : 1; }
+function cdMult() { return mod === 'turbo' ? 0.6 : 1; }
+
+// ---------- Modificadores de rodada (cada rodada pode vir diferente) ----------
+const MODS = {
+  normal: ['', ''],
+  lua: ['GRAVIDADE LUNAR', 'todo mundo pesa 40% menos'],
+  gigantes: ['BOLAS GIGANTES', 'toda bola é gigante e arrasta mais'],
+  chuva: ['CHUVA DE ORBES', 'power-up aparecendo o tempo todo'],
+  vento: ['VENTANIA', 'o vento empurra você e as bolas'],
+  turbo: ['CANHÃO TURBO', 'recarga quase pela metade'],
+  pesado: ['TIRO PESADO', 'bola mais lenta, mas arrasta muito mais'],
+};
+let mod = 'normal', windA = 0, sudden = false;
+const wind = new V3();
+function pickMod() {
+  if (rounds === 0 || Math.random() < 0.35) mod = 'normal';
+  else {
+    const ks = Object.keys(MODS).filter(k => k !== 'normal' && k !== mod);
+    mod = ks[Math.floor(Math.random() * ks.length)];
+  }
+  windA = rand(0, Math.PI * 2);
+}
+const gravMod = () => mod === 'lua' ? 0.6 : 1;
+const dragShare = () => DRAG_SHARE * (mod === 'pesado' ? 1.5 : 1);
+
+// ---------- Progressão: XP, níveis, visuais, missões do dia ----------
+const MISSION_POOL = [
+  ['combo15', 'Faça um combo x15', 15],
+  ['combo25', 'Chegue no IMPARÁVEL (combo x25)', 25],
+  ['kills5', 'Derrube 5 adversários', 5],
+  ['stomp2', 'Dê 2 pisões', 2],
+  ['dodge3', 'Faça 3 esquivas', 3],
+  ['perfect10', 'Acerte 10 recargas perfeitas', 10],
+  ['orbs4', 'Pegue 4 orbes', 4],
+  ['win2', 'Vença 2 rodadas', 2],
+  ['edge1', 'Se salve no limite', 1],
+  ['defesa3', 'Faça 3 defesas', 3],
+  ['tempo60', 'Fique 60 s no ar numa rodada', 60],
+];
+const MISSION_EV = { kill: 'kills5', stomp: 'stomp2', dodge: 'dodge3', perfect: 'perfect10', orb: 'orbs4', win: 'win2', edge: 'edge1', defesa: 'defesa3' };
+const XP_PER = { combo: 1, kill: 15, perfect: 4, dodge: 8, stomp: 10, defesa: 6, orb: 3, edge: 12, win: 25 };
+const UNLOCKS = [ // [nível, tipo, id, nome]
+  [2, 'trail', 'azul', 'Rastro azul'],
+  [3, 'hat', 'festa', 'Chapéu de festa'],
+  [4, 'trail', 'arcoiris', 'Rastro arco-íris'],
+  [5, 'hat', 'coroa', 'Coroa'],
+  [6, 'trail', 'ouro', 'Rastro dourado'],
+  [7, 'hat', 'chifres', 'Chifres'],
+  [9, 'hat', 'aureola', 'Auréola'],
+  [10, 'trail', 'fogo', 'Rastro de fogo'],
+];
+const TRAILS = { padrao: ['Padrão', 0xdddddd], azul: ['Azul', 0x3aa0ff], arcoiris: ['Arco-íris', 0xffffff], ouro: ['Dourado', 0xffd23f], fogo: ['Fogo', 0xff5a1a] };
+const HATS = { nada: 'Nenhum', festa: 'Festa', coroa: 'Coroa', chifres: 'Chifres', aureola: 'Auréola' };
+let prof = { xp: 0, level: 1, trail: 'padrao', hat: 'nada', skill: 1, games: 0, day: '', missions: [] };
+try { prof = Object.assign(prof, JSON.parse(localStorage.getItem('canhao.perfil') || '{}')); } catch (e) {}
+function saveProf() { try { localStorage.setItem('canhao.perfil', JSON.stringify(prof)); } catch (e) {} }
+// perfil salvo corrompido ou de versão antiga: volta ao padrão sem quebrar
+if (!TRAILS[prof.trail]) prof.trail = 'padrao';
+if (!HATS[prof.hat]) prof.hat = 'nada';
+if (!(prof.skill > 0)) prof.skill = 1;
+if (!Array.isArray(prof.missions)) prof.missions = [];
+const xpNeed = l => 100 + 60 * (l - 1);
+const unlocked = (type, id) => id === 'padrao' || id === 'nada' || UNLOCKS.some(u => u[1] === type && u[2] === id && prof.level >= u[0]);
+function today() { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+function ensureMissions() {
+  if (prof.day === today() && prof.missions.length === 3) return;
+  prof.day = today();
+  // sorteio fixo pelo dia: as mesmas 3 missões para todo mundo no mesmo dia
+  let seed = [...prof.day].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const pool = MISSION_POOL.slice(); prof.missions = [];
+  while (prof.missions.length < 3) {
+    const i = Math.floor(rnd() * pool.length);
+    prof.missions.push({ id: pool[i][0], prog: 0, done: false }); pool.splice(i, 1);
+  }
+  saveProf();
+}
+ensureMissions();
+let roundXP = 0, roundStats = {}, survXP = 0, summary = '';
+function gainXP(n) {
+  roundXP += n; prof.xp += n;
+  while (prof.xp >= xpNeed(prof.level)) {
+    prof.xp -= xpNeed(prof.level); prof.level++;
+    const un = UNLOCKS.filter(u => u[0] === prof.level).map(u => u[3]);
+    announce(`NÍVEL ${prof.level}!`, '#7fffb0', 1.6);
+    log(`⭐ Nível ${prof.level}${un.length ? ' · desbloqueou: ' + un.join(', ') : ''}`);
+    tone(523, 1046, 0.3, 0.1); tone(784, 1568, 0.4, 0.07, 'triangle');
+  }
+}
+// evento do jogador: soma XP, estatística da rodada e progresso das missões
+function stat(ev, val = 1) {
+  if (state !== 'play' && state !== 'end') return;
+  if (ev === 'comboMax' || ev === 'tempo') roundStats[ev] = Math.max(roundStats[ev] || 0, val);
+  else roundStats[ev] = (roundStats[ev] || 0) + val;
+  if (XP_PER[ev]) gainXP(XP_PER[ev] * val);
+  for (const m of prof.missions) {
+    if (m.done) continue;
+    const def = MISSION_POOL.find(x => x[0] === m.id);
+    if (!def) continue;
+    if (MISSION_EV[ev] === m.id) m.prog += val;
+    if (ev === 'comboMax' && (m.id === 'combo15' || m.id === 'combo25')) m.prog = Math.max(m.prog, val);
+    if (ev === 'tempo' && m.id === 'tempo60') m.prog = Math.max(m.prog, val);
+    if (m.prog >= def[2]) {
+      m.done = true; m.prog = def[2]; gainXP(60);
+      log(`✅ Missão: ${def[1]} (+60 XP)`);
+      announce('MISSÃO CONCLUÍDA!', '#7fffb0', 1.4);
+    }
+  }
+  saveProf();
+}
+function missionsHTML() {
+  return prof.missions.map(m => {
+    const d = MISSION_POOL.find(x => x[0] === m.id);
+    return d ? `${m.done ? '✅' : '▫️'} ${d[1]} <small>(${Math.floor(m.prog)}/${d[2]})</small>` : '';
+  }).join('<br>');
+}
+function renderMeta() {
+  const el = document.getElementById('meta');
+  if (!el) return;
+  ensureMissions();
+  el.innerHTML = `<b>Nível ${prof.level}</b> · ${prof.xp}/${xpNeed(prof.level)} XP` +
+    `<div class="xpbar"><i style="width:${(100 * prof.xp / xpNeed(prof.level)).toFixed(0)}%"></i></div>` +
+    `<b>Missões de hoje</b> <small>(+60 XP cada)</small><br>${missionsHTML()}`;
+  const nx = UNLOCKS.find(u => u[0] > prof.level);
+  document.getElementById('nextUnlock').textContent = nx ? `Próximo prêmio: ${nx[3]} no nível ${nx[0]}` : 'Tudo desbloqueado!';
+  document.getElementById('btTrail').textContent = 'Rastro: ' + TRAILS[prof.trail][0] + ' ▸';
+  document.getElementById('btHat').textContent = 'Chapéu: ' + HATS[prof.hat] + ' ▸';
+}
+function cycleSkin(type) {
+  const list = type === 'trail' ? Object.keys(TRAILS) : Object.keys(HATS);
+  const cur = type === 'trail' ? prof.trail : prof.hat;
+  let i = list.indexOf(cur);
+  for (let n = 0; n < list.length; n++) {
+    i = (i + 1) % list.length;
+    if (unlocked(type, list[i])) break;
+  }
+  if (type === 'trail') prof.trail = list[i]; else prof.hat = list[i];
+  saveProf(); renderMeta(); applyHat();
+}
+
+// ---------- Dicas (aparecem quando você cai) ----------
+const TIPS = [
+  'Dica: aperte S e logo em seguida Espaço. A bola só serve de chão por um instante.',
+  'Dica: aperte S de novo quando a barra passar na faixa branca: recarga PERFEITA.',
+  'Dica: Q/E dá um dash que atravessa tiros. No último instante vira ESQUIVA.',
+  'Dica: cair em cima da cabeça de alguém é PISÃO, e o pulo volta na hora.',
+  'Dica: segure S para carregar. Tiro carregado te joga mais alto e arrasta mais.',
+  'Dica: quanto mais alto, mais pesada a gravidade. O meio do céu é o lugar seguro.',
+  'Dica: as setas na borda da tela mostram tiro vindo na sua direção.',
+  'Dica: o combo é o seu motor. Em chamas (x12) a bola fica mais rápida.',
+];
+let deathTip = '';
+function pickTip() {
+  if ((human.lifeBest || 0) < 4) return TIPS[0];
+  if (human.killedBy && Math.random() < 0.6) return Math.random() < 0.5 ? TIPS[2] : TIPS[6];
+  return TIPS[1 + Math.floor(Math.random() * (TIPS.length - 1))];
+}
+
+// ---------- Música que cresce com o ritmo ----------
+// 4 camadas em sincronia: batida (sempre) · chimbal e palma (Bom ritmo)
+// · baixo (Em chamas) · arpejo (Imparável). Perto do limite, batimento cardíaco.
+const music = { on: true, bus: null, layers: [], step: 0, next: 0 };
+try { music.on = localStorage.getItem('canhao.musica') !== '0'; } catch (e) {}
+let noiseBuf = null, danger = 0;
+const BPM = 128, STEP_T = 60 / BPM / 4;
+const PROG = [[45, 57, 60, 64], [41, 57, 60, 65], [48, 55, 60, 64], [43, 55, 59, 62]]; // Lá m · Fá · Dó · Sol
+const mtof = m => 440 * 2 ** ((m - 69) / 12);
+function musicInit() {
+  if (!actx || music.bus) return;
+  music.bus = actx.createGain(); music.bus.gain.value = music.on ? 0.5 : 0; music.bus.connect(actx.destination);
+  music.layers = [0, 1, 2, 3].map(() => { const g = actx.createGain(); g.gain.value = 0; g.connect(music.bus); return g; });
+  noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.25), actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  music.next = actx.currentTime + 0.1;
+  setInterval(musicTick, 25);
+}
+function toggleMusic() {
+  music.on = !music.on;
+  try { localStorage.setItem('canhao.musica', music.on ? '1' : '0'); } catch (e) {}
+  if (music.bus) music.bus.gain.setTargetAtTime(music.on ? 0.5 : 0, actx.currentTime, 0.1);
+  log(music.on ? '🎵 Música ligada (N)' : '🔇 Música desligada (N)');
+}
+function musicTick() {
+  const now = actx.currentTime;
+  const active = started && !paused;
+  const ti = human.alive ? tierOf(human) : 0;
+  const tgt = [1, ti >= 1 ? 1 : 0, ti >= 2 ? 1 : 0, ti >= 3 ? 1 : 0];
+  const vol = [0.55, 0.4, 0.32, 0.16];
+  music.layers.forEach((g, i) => g.gain.setTargetAtTime(active ? tgt[i] * vol[i] : 0, now, 0.35));
+  if (music.next < now) music.next = now + 0.03;
+  while (music.next < now + 0.12) {
+    if (active) playStep(music.step, music.next);
+    music.next += STEP_T * (slowT > 0 ? 2 : 1);
+    music.step = (music.step + 1) % 64;
+  }
+}
+function env(g, t, peak, dur) {
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+}
+function osc(type, f0, f1, t, dur, peak, dest, filt) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  env(g, t, peak, dur);
+  if (filt) { o.connect(filt); filt.connect(g); } else o.connect(g);
+  g.connect(dest); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(t, dur, peak, dest, type, freq) {
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; f.type = type; f.frequency.value = freq;
+  env(g, t, peak, dur);
+  s.connect(f).connect(g).connect(dest); s.start(t); s.stop(t + dur + 0.02);
+}
+function playStep(s, t) {
+  const pos = s % 16, chord = PROG[Math.floor(s / 16) % 4], L = music.layers;
+  if (pos % 4 === 0) osc('sine', 150, 42, t, 0.16, 0.9, L[0]);                          // bumbo
+  if (pos % 4 === 2) noise(t, 0.04, 0.35, L[1], 'highpass', 7000);                    // chimbal
+  if (pos === 4 || pos === 12) noise(t, 0.12, 0.5, L[1], 'bandpass', 1600);            // palma
+  if ([0, 3, 6, 8, 11, 14].includes(pos)) {                                            // baixo
+    const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+    osc('sawtooth', mtof(chord[0] - 12), mtof(chord[0] - 12), t, 0.17, 0.5, L[2], f);
+  }
+  const arp = [chord[1], chord[2], chord[3], chord[2] + 12];                           // arpejo
+  osc('square', mtof(arp[pos % 4] + 12), mtof(arp[pos % 4] + 12), t, 0.08, 0.25, L[3]);
+  // batimento cardíaco perto do limite (fora da música: é aviso de jogo)
+  if (danger > 0.05 && (pos === 0 || pos === 3) && Math.floor(s / 16) % (danger > 0.6 ? 1 : 2) === 0)
+    osc('sine', 70, 40, t, 0.18, 0.25 + 0.5 * danger, actx.destination);
+}
 
 // ---------- Anúncios, câmera lenta, recordes ----------
 let popColor = '#ffd23f', slowT = 0;
@@ -501,8 +785,10 @@ const PENTA = [0, 2, 4, 7, 9];
 function addCombo(p) {
   const before = tierOf(p);
   p.combo++; p.comboT = COMBO_WINDOW;
+  p.lifeBest = Math.max(p.lifeBest || 0, p.combo);
   const after = tierOf(p);
   if (!p.human) return;
+  stat('combo'); stat('comboMax', p.combo);
   // cada pulo toca uma nota mais aguda (escala pentatônica): o ritmo vira música
   const i = Math.min(p.combo - 1, 19);
   const semi = 12 * Math.floor(i / 5) + PENTA[i % 5];
@@ -549,7 +835,8 @@ function removeOrb(o) {
 function updateOrbs(dt) {
   if (state === 'play') {
     orbTimer -= dt;
-    if (orbTimer <= 0 && orbs.length < 3) { spawnOrb(); orbTimer = rand(5, 8); }
+    const rain = mod === 'chuva';
+    if (orbTimer <= 0 && orbs.length < (rain ? 7 : 3)) { spawnOrb(); orbTimer = rain ? rand(1.2, 2.2) : rand(5, 8); }
   }
   for (const o of orbs.slice()) {
     o.t += dt; o.life -= dt;
@@ -563,7 +850,7 @@ function updateOrbs(dt) {
       c.pw[o.type] = dur;
       sparks(o.mesh.position.clone(), UP, 0.6, color);
       log(`${nm(c)} pegou ${label}`);
-      if (c.human) { announce(label + '!', '#' + color.toString(16).padStart(6, '0'), 1); tone(660, 1320, 0.2, 0.1); tone(990, 1980, 0.25, 0.06, 'triangle'); }
+      if (c.human) { announce(label + '!', '#' + color.toString(16).padStart(6, '0'), 1); tone(660, 1320, 0.2, 0.1); tone(990, 1980, 0.25, 0.06, 'triangle'); stat('orb'); }
       removeOrb(o);
       break;
     }
@@ -588,7 +875,7 @@ function perfectDodge(p) {
   p.dodged = true; p.dashCd = 0;
   addCombo(p);
   if (p.human) {
-    slowmo(0.5);
+    slowmo(0.5); stat('dodge');
     announce('ESQUIVA!', '#7fe3ff', 0.9);
     tone(1200, 600, 0.3, 0.08, 'sine');
   }
@@ -603,7 +890,7 @@ function stomp(top, bot) {
   const k = clamp(top.size / bot.size, 0.6, 2);
   bot.vel.y = Math.min(bot.vel.y, 0) - 13 * k;
   impactFx(bot, bot.pos.clone().lerp(top.pos, 0.5), new V3(0, -1, 0), 0.7, 0xffd23f, top.human, true);
-  if (top.human) announce('PISÃO!', '#ffd23f', 0.8);
+  if (top.human) { announce('PISÃO!', '#ffd23f', 0.8); stat('stomp'); }
   else if (bot.human) announce('PISARAM EM VOCÊ', '#ff6b6b', 0.8);
 }
 // escudo absorve uma pancada
@@ -644,7 +931,7 @@ function growFx(c) {
   s.material.transparent = true;
   scene.add(s);
   growList.push({ m: s, t: 0, life: 1.3, owner: c });
-  if (c.human) { popText = mode === 'renascer' ? `MAIOR! x${c.size.toFixed(2)}` : '+1 KILL'; popT = 1.2; }
+  if (c.human) announce(mode === 'renascer' ? `MAIOR! x${c.size.toFixed(2)}` : '+1 KILL', '#ffd23f', 1.2);
 }
 const GROW_PULSE = 0.6;
 function updateGrowFx(dt) {
@@ -684,15 +971,23 @@ function respawn(c) {
   c.streak = Math.floor(c.streak / 2); setSize(c);
   c.lastHitBy = null; c.dragB = null; c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
   c.combo = 0; c.comboT = 0; c.dashT = 0; c.dashCd = 0;
+  c.lifeBest = 0; c.killedBy = null; c.edge = false;
   for (const k of PW_KEYS) c.pw[k] = 0;
 }
 function killChar(c) {
   c.alive = false; c.mesh.visible = false;
   lavaBurst(c.pos.x, c.pos.z);
+  const killer = c.lastHitBy && clock - c.lastHitT < HIT_CREDIT ? c.lastHitBy : null;
+  c.killedBy = killer;
+  if (c.human) {
+    deathTip = pickTip();
+    c.diedAt = playT;
+    if (mode === 'classico') stat('tempo', playT);
+  }
   breakCombo(c);
   if (c.human && mode === 'classico' && playT > records.tempo) { records.tempo = playT; saveRecords(); }
-  const killer = c.lastHitBy && clock - c.lastHitT < HIT_CREDIT ? c.lastHitBy : null;
   if (killer) {
+    if (killer.human) stat('kill');
     killer.kills++; killer.streak++; setSize(killer);
     log(`${nm(killer)} derrubou ${nm(c)}`);
     if (killer.alive) growFx(killer);
@@ -728,7 +1023,8 @@ function spawnUnder(p, dir, charge = 0) {
   const perfect = p.perfectNext || (p.ai && Math.random() < 0.12);
   p.perfectNext = false;
   const tier = TIERS[tierOf(p)];
-  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS) * (perfect ? PERFECT_SPEED : 1) * tier[3];
+  const liftSpeed = BALL_SPEED * (1 + k * CHARGE_BONUS) * (perfect ? PERFECT_SPEED : 1) * tier[3];
+  const speed = liftSpeed * (mod === 'pesado' ? 0.75 : 1);
   // tiro triplo: duas bolas extras abertas para os lados
   const dirs = [d];
   if (p.pw.triplo > 0) for (const s of [-1, 1]) dirs.push(d.clone().applyAxisAngle(UP, s * 0.22));
@@ -737,13 +1033,13 @@ function spawnUnder(p, dir, charge = 0) {
     const bb = spawnBall(p, pos, dd.clone().multiplyScalar(speed));
     bb.charged = k > 0.25;
     if (perfect) { bb.perfect = true; bb.mesh.children[1].material = goldBandMat; }
-    if (p.pw.gigante > 0) { bb.big = 1.6; bb.r = BR * 1.6; bb.im = 1 / (BALL_MASS * 2.5); }
+    if (p.pw.gigante > 0 || mod === 'gigantes') { bb.big = 1.6; bb.r = BR * 1.6; bb.im = 1 / (BALL_MASS * 2.5); }
     if (!ball) ball = bb;
   }
   // Rebote: a explosão embaixo empurra o boneco pra cima com força proporcional
   // à energia do tiro (cresce com o quadrado da velocidade da bola).
   // Tiro normal ≈ +3 m/s, carga cheia (2x a velocidade) ≈ +12 m/s.
-  const e = (speed / (BALL_SPEED * (1 + CHARGE_BONUS))) ** 2;
+  const e = (liftSpeed / (BALL_SPEED * (1 + CHARGE_BONUS))) ** 2;
   const lift = RECOIL_LIFT * e;
   p.vel.y = Math.max(p.vel.y, 0) + lift;
   // e um pouco pra trás, contra a direção do tiro
@@ -775,7 +1071,8 @@ function jump(p) {
   p.groundTime = 1; p.surfaceWindow = 0; p.jumpCd = 0.18;
 }
 // só pode pular encostado numa superfície (bola, plataforma, cabeça de alguém)
-const grounded = p => p.groundTime < 0.08 || p.surfaceWindow > 0;
+// (0,1 s de "coyote time": ainda dá para pular logo depois de perder o contato)
+const grounded = p => p.groundTime < 0.1 || p.surfaceWindow > 0;
 
 // ---------- Física ----------
 const tmp = new V3();
@@ -802,11 +1099,13 @@ function physics(dt) {
     } else {
       c.vel.x *= 1 - 0.3 * dt; c.vel.z *= 1 - 0.3 * dt;
     }
-    c.vel.y = Math.max(-32, c.vel.y + G_PLAYER * gravAt(c.pos.y) * (c.pw.pena > 0 ? 0.55 : 1) * dt);
+    c.vel.y = Math.max(-32, c.vel.y + G_PLAYER * gravAt(c.pos.y) * (c.pw.pena > 0 ? 0.55 : 1) * gravMod() * dt);
+    if (mod === 'vento' && !c.dragB) { c.vel.x += wind.x * 3.2 * dt; c.vel.z += wind.z * 3.2 * dt; }
     c.contact = false;
   }
   for (const b of balls) {
-    b.vel.y = Math.max(-32, b.vel.y + G_BALL * gravAt(b.pos.y) * dt);
+    b.vel.y = Math.max(-32, b.vel.y + G_BALL * gravAt(b.pos.y) * gravMod() * dt);
+    if (mod === 'vento') { b.vel.x += wind.x * 2.5 * dt; b.vel.z += wind.z * 2.5 * dt; }
     b.vel.x *= 1 - 0.03 * dt; b.vel.z *= 1 - 0.03 * dt;
   }
   for (const o of bodies) o.pos.addScaledVector(o.vel, dt);
@@ -851,7 +1150,7 @@ function physics(dt) {
           if (shieldBlock(pc)) { bl.vel.multiplyScalar(-0.45); bl.owner = pc; continue; }
           pc.lastHitBy = bl.owner; pc.lastHitT = clock;
           const k = clamp((into - DRAG_MIN) / 70, 0, 1); // 45 m/s ≈ 0.36 · carga cheia ≈ 1
-          const v = bl.vel.clone().multiplyScalar(DRAG_SHARE * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
+          const v = bl.vel.clone().multiplyScalar(dragShare() * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
           pc.vel.copy(v); bl.vel.copy(v);
           pc.dragB = bl; pc.dragT = 0.16 + 0.24 * k + (bl.perfect ? 0.08 : 0);
           pc.groundBody = null; pc.groundTime = 1; pc.surfaceWindow = 0;
@@ -877,7 +1176,7 @@ function physics(dt) {
         if (near > 0) tone(1500, 500, 0.1, 0.08 * near, 'square');
         if (a.owner.human || b.owner.human) {
           announce('DEFESA!', '#7fe3ff', 0.7); shake = Math.max(shake, 0.2);
-          if (human.alive) addCombo(human);
+          if (human.alive) { addCombo(human); stat('defesa'); }
         }
       }
       if (vrel < 0) {
@@ -917,7 +1216,7 @@ function physics(dt) {
   }
   for (const b of balls.slice()) {
     b.age += dt; b.life -= dt; if (b.clashT > 0) b.clashT -= dt;
-    if (b.life <= 0 || b.pos.y < KILL_Y - 5) removeBall(b);
+    if (b.life <= 0 || b.pos.y < killY - 5) removeBall(b);
   }
 }
 
@@ -1025,9 +1324,11 @@ addEventListener('keydown', e => {
   if (['Space', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (!started || paused) return;
   if (UNDER_KEYS.includes(e.code) && !e.repeat) startCharge();
-  if (e.code === 'Space' && !e.repeat) human.wantJump = 0.06;
+  // buffer de 0,12 s: Espaço apertado um pouco antes da hora ainda vale
+  if (e.code === 'Space' && !e.repeat) human.wantJump = 0.12;
   if ((e.code === 'KeyQ' || e.code === 'KeyE') && !e.repeat) human.wantDash = 0.1;
   if (e.code === 'KeyR' && !e.repeat) resetRound();
+  if (e.code === 'KeyN' && !e.repeat) toggleMusic();
   if (e.code === 'KeyM' && !e.repeat) setMode(mode === 'classico' ? 'renascer' : 'classico');
 });
 addEventListener('keyup', e => {
@@ -1047,7 +1348,7 @@ function tryReload() {
   human.reloadTried = true;
   const prog = 1 - human.cd / human.cdFull;
   if (prog >= RELOAD_ZONE[0] && prog <= RELOAD_ZONE[1]) {
-    human.cd = 0; human.perfectNext = true;
+    human.cd = 0; human.perfectNext = true; stat('perfect');
     reloadMsg = 'PERFEITO!'; reloadColor = '#ffd23f'; reloadT = 0.7;
     tone(880, 1760, 0.12, 0.14); tone(1320, 2200, 0.18, 0.08, 'triangle');
   } else if (prog < RELOAD_ZONE[0]) {
@@ -1069,8 +1370,12 @@ addEventListener('contextmenu', e => e.preventDefault());
 const overlay = document.getElementById('overlay');
 // escolher o modo no menu (o clique segue para o overlay e começa o jogo)
 document.querySelectorAll('#modes button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+// visual (não começa o jogo ao clicar)
+document.getElementById('btTrail').addEventListener('click', e => { e.stopPropagation(); cycleSkin('trail'); });
+document.getElementById('btHat').addEventListener('click', e => { e.stopPropagation(); cycleSkin('hat'); });
 overlay.addEventListener('click', () => {
   if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  musicInit();
   overlay.style.display = 'none';
   if (!started) { started = true; resetRound(); }
   paused = false;
@@ -1086,6 +1391,7 @@ document.addEventListener('pointerlockchange', () => {
     paused = true;
     document.getElementById('ovTitle').textContent = 'Pausado';
     document.getElementById('ovGo').textContent = 'Clique para voltar';
+    showRecords(); renderMeta();
     overlay.style.display = 'flex';
   }
 });
@@ -1177,8 +1483,20 @@ function resetRound() {
     for (const k of PW_KEYS) c.pw[k] = 0;
     c.kills = 0; c.streak = 0; c.lastHitBy = null; c.protect = 0; c.respawnT = 0; setSize(c);
     c.yaw = c.targetYaw = Math.atan2(-c.pos.x, -c.pos.z);
-    if (c.ai) { c.ai.spawnT = 0; c.ai.jumpT = 0; c.ai.spawnDelay = rand(0, c.ai.react); }
+    c.lifeBest = 0; c.killedBy = null; c.edge = false; c.diedAt = 0;
+    if (c.ai) {
+      // dificuldade adaptativa: os bots acompanham o seu nível de jogo
+      const ai = c.ai, sk = prof.skill;
+      if (!ai.base) ai.base = { react: ai.react, aggr: ai.aggr, miss: ai.miss };
+      ai.react = ai.base.react / sk; ai.miss = ai.base.miss / sk; ai.aggr = clamp(ai.base.aggr * sk, 0.1, 0.9);
+      ai.spawnT = 0; ai.jumpT = 0; ai.spawnDelay = rand(0, ai.react);
+    }
   });
+  killY = KILL_Y; sudden = false;
+  pickMod();
+  applyHat();
+  roundXP = 0; roundStats = {}; survXP = 0; summary = '';
+  renderMeta();
   camYaw = Math.atan2(human.pos.x, human.pos.z);
   camFocus.copy(human.pos);
   state = 'countdown'; stateT = 0; playT = 0; feed.length = 0; winnerText = '';
@@ -1187,18 +1505,46 @@ function resetRound() {
   showRecords();
 }
 
+// fim de rodada: XP, missões, dificuldade dos bots e o resumo na tela
+function endRound(won) {
+  state = 'end'; stateT = 0; slowmo(1.2);
+  rounds++;
+  if (won) stat('win');
+  if (human.alive && mode === 'classico') stat('tempo', playT);
+  const lived = human.alive ? playT : (human.diedAt || playT);
+  if (won) prof.skill = Math.min(1.6, prof.skill + 0.08);
+  else if (lived < 20) prof.skill = Math.max(0.6, prof.skill - 0.07);
+  else prof.skill = Math.max(0.6, prof.skill - 0.02);
+  prof.games++; saveProf();
+  const rs = roundStats;
+  let close = '';
+  const cm = rs.comboMax || 0;
+  if (cm > 0 && cm < records.combo && records.combo - cm <= 6) close = `Faltaram só ${records.combo - cm} para o seu recorde de combo (x${records.combo})!`;
+  else if (mode === 'classico' && !won && lived < records.tempo && records.tempo - lived <= 10) close = `Faltaram ${(records.tempo - lived).toFixed(0)} s para o seu recorde no ar!`;
+  summary = `Combo máx <b>x${cm}</b> · ${rs.kill || 0} derrubadas · ${rs.perfect || 0} perfeitas · ${rs.dodge || 0} esquivas · ${rs.stomp || 0} pisões<br>` +
+    `<b style="color:#7fffb0">+${roundXP} XP</b> · Nível ${prof.level} (${prof.xp}/${xpNeed(prof.level)})` +
+    (close ? `<br><span style="color:#ffd23f">${close}</span>` : '');
+}
 function updateState(dt) {
   stateT += dt;
   if (state === 'countdown' && stateT >= 3) { state = 'play'; stateT = 0; plat.vy = -2; }
   if (state === 'play') {
     playT += dt;
+    // XP por sobreviver: 1 a cada 3 s no ar
+    if (human.alive) { survXP += dt; if (survXP >= 3) { survXP -= 3; gainXP(1); } }
+    if (mod === 'vento') { windA += dt * 0.12; wind.set(Math.cos(windA), 0, Math.sin(windA)); }
+    // morte súbita (Clássico): depois de 40 s o limite sobe até -6
+    if (mode === 'classico' && playT > 40) {
+      if (!sudden) { sudden = true; announce('MORTE SÚBITA!', '#ff5a5a', 1.4); log('⚠️ O limite está subindo!'); }
+      killY = Math.min(-6, killY + 0.45 * dt);
+    }
     if (plat.active && stateT > 0) {
       plat.vy -= 14 * dt; plat.y += plat.vy * dt;
       platMat.opacity = clamp(1 + plat.y / 6, 0, 1);
       if (plat.y < -3) plat.active = false;
     }
     for (const c of chars) {
-      if (c.alive && c.pos.y < KILL_Y) killChar(c);
+      if (c.alive && c.pos.y < killY) killChar(c);
       else if (!c.alive && mode === 'renascer' && c.respawnT > 0) {
         c.respawnT -= dt;
         if (c.respawnT <= 0) respawn(c);
@@ -1208,25 +1554,24 @@ function updateState(dt) {
     if (mode === 'renascer') {
       const top = chars.reduce((a, b) => (b.kills > a.kills ? b : a));
       if (top.kills >= KILL_GOAL) {
-        rounds++;
         if (top.human) { wins++; winnerText = 'Você venceu!'; } else winnerText = top.name + ' venceu';
-        state = 'end'; stateT = 0; slowmo(1.2);
+        endRound(top.human);
       }
     } else if (alive.length <= 1) {
-      rounds++;
+      let won = false;
       if (alive.length === 1) {
         if (alive[0].human) {
-          wins++; winnerText = 'Você venceu!';
+          wins++; winnerText = 'Você venceu!'; won = true;
           if (playT > records.tempo) { records.tempo = playT; saveRecords(); }
         }
         else winnerText = alive[0].name + ' venceu';
       } else winnerText = 'Empate';
-      state = 'end'; stateT = 0; slowmo(1.2);
+      endRound(won);
     }
   }
   if (!plat.active) platform.visible = false;
   platform.position.y = plat.y;
-  if (state === 'end' && stateT > 3.5) resetRound();
+  if (state === 'end' && stateT > 5) resetRound();
 }
 
 // ---------- Loop ----------
@@ -1276,6 +1621,7 @@ const hud = {
   combo: document.getElementById('combo'), comboN: document.getElementById('comboN'),
   comboTier: document.getElementById('comboTier'), comboFill: document.getElementById('comboFill'),
   pw: document.getElementById('pw'), dash: document.getElementById('dash'),
+  mod: document.getElementById('mod'),
 };
 let acc = 0, last = performance.now();
 
@@ -1390,8 +1736,9 @@ function frame(now) {
   }
 
   // câmera em 3ª pessoa
+  // morreu: a câmera segue quem te derrubou (kill cam); senão, alguém vivo
   let target = human;
-  if (!human.alive) target = chars.find(c => c.alive) || human;
+  if (!human.alive) target = (human.killedBy && human.killedBy.alive ? human.killedBy : chars.find(c => c.alive)) || human;
   camFocus.lerp(target.pos, 1 - Math.exp(-12 * dt));
   // câmera se afasta quando você cresce
   const dist = 7.5 * (0.55 + 0.45 * target.size), cp = Math.cos(camPitch);
@@ -1408,11 +1755,25 @@ function frame(now) {
   sun.position.set(camFocus.x + 8, camFocus.y + 45, camFocus.z + 5);
   sun.target.position.copy(camFocus);
   // perto do fim: a grade acende e a borda da tela fica vermelha
-  const toEnd = (human.alive ? human.pos.y : camFocus.y) - KILL_Y;
+  const toEnd = (human.alive ? human.pos.y : camFocus.y) - killY;
   deathGrid.material.opacity = clamp(1 - toEnd / 22, 0.06, 0.75);
   deathGrid.position.x = Math.round(camFocus.x / 4) * 4;
   deathGrid.position.z = Math.round(camFocus.z / 4) * 4;
+  deathGrid.position.y = killY;
   dangerEl.style.opacity = human.alive ? clamp(1 - toEnd / 12, 0, 1).toFixed(2) : 0;
+  danger = human.alive && state === 'play' ? clamp(1 - toEnd / 10, 0, 1) : 0;
+  // salvo no limite: chegou a menos de 5 m do fim e voltou para cima
+  if (human.alive && state === 'play' && started && !paused) {
+    if (toEnd < 5) human.edge = true;
+    else if (human.edge && toEnd > 10) {
+      human.edge = false;
+      announce('SALVO NO LIMITE!', '#7fffb0', 1.1); slowmo(0.3);
+      addCombo(human); stat('edge');
+      tone(392, 784, 0.25, 0.1); tone(587, 1174, 0.3, 0.07, 'triangle');
+    }
+  }
+  // rastro arco-íris muda de cor sem parar
+  if (skinTrailMats.arcoiris) skinTrailMats.arcoiris.color.setHSL((clock * 0.4) % 1, 1, 0.6);
   updateThreats();
   guide.visible = human.alive;
   guide.position.copy(human.pos);
@@ -1431,7 +1792,17 @@ function frame(now) {
     `Até o fim: <b style="color:${toEnd < 10 ? '#ff6b6b' : 'inherit'}">${Math.max(0, toEnd).toFixed(0)} m</b><br>` +
     `Tempo: <b>${playT.toFixed(0)}s</b><br>` +
     `Vitórias: <b>${wins}</b> de ${rounds}` +
-    (cdMult() > 1 ? `<br><span style="color:#ff8c8c">Morte súbita: recarga x${cdMult().toFixed(1)}</span>` : '');
+    `<br>Nível <b>${prof.level}</b> <small>(${prof.xp}/${xpNeed(prof.level)} XP)</small>` +
+    (sudden ? `<br><span style="color:#ff8c8c">Morte súbita: o limite está subindo</span>` : '');
+  // modificador da rodada (com seta do vento relativa à câmera)
+  if (mod !== 'normal') {
+    let txt = '⚙️ ' + MODS[mod][0];
+    if (mod === 'vento') {
+      const rel = Math.atan2(wind.x, wind.z) - (camYaw + Math.PI);
+      txt += ` <span style="display:inline-block;transform:rotate(${(-rel).toFixed(2)}rad)">⬆</span>`;
+    }
+    hud.mod.innerHTML = txt;
+  } else hud.mod.innerHTML = '';
   hud.feed.innerHTML = feed.filter(f => f.t > 0).map(f => f.msg).join('<br>');
   if (human.charging) {
     // barra vira medidor de carga
@@ -1446,13 +1817,20 @@ function frame(now) {
   hud.label.style.color = reloadT > 0 ? reloadColor : human.perfectNext ? '#ffd23f' : '';
   hud.label.style.fontSize = reloadT > 0 ? (13 + 10 * Math.max(0, reloadT - 0.5) / 0.2 + 5).toFixed(0) + 'px' : '';
   let center = '', sub = '';
-  if (state === 'countdown') { center = Math.ceil(3 - stateT); sub = 'A plataforma vai sumir — prepare o canhão'; }
+  const tipLine = `<br><span style="opacity:.85;font-size:15px">${deathTip}</span>`;
+  const byLine = human.killedBy ? `Derrubado por <b>${nm(human.killedBy)}</b> · ` : '';
+  if (state === 'countdown') {
+    center = Math.ceil(3 - stateT);
+    sub = mod !== 'normal' ? `Rodada especial: <b style="color:#ffd23f">${MODS[mod][0]}</b> — ${MODS[mod][1]}`
+      : prof.games < 3 ? 'Espaço pula · no ar aperte S (a bola sai embaixo) · Espaço de novo em cima dela'
+      : 'A plataforma vai sumir — prepare o canhão';
+  }
   else if (state === 'play' && stateT < 0.8) center = 'VAI!';
-  else if (state === 'end') { center = winnerText; sub = 'Próxima rodada já já…'; }
-  else if (!human.alive && mode === 'renascer') sub = `Renascendo em ${Math.max(0, human.respawnT).toFixed(1)} s`;
-  else if (!human.alive) sub = 'Você caiu. Assistindo… (R reinicia)';
+  else if (state === 'end') { center = winnerText; sub = summary || 'Próxima rodada já já…'; }
+  else if (!human.alive && mode === 'renascer') sub = `${byLine}Renascendo em ${Math.max(0, human.respawnT).toFixed(1)} s${tipLine}`;
+  else if (!human.alive) sub = `${byLine}Você durou ${(human.diedAt || 0).toFixed(0)} s · R pula para a próxima rodada${tipLine}`;
   if (!center && popT > 0) center = popText;
-  hud.center.textContent = center; hud.sub.textContent = sub;
+  hud.center.textContent = center; hud.sub.innerHTML = sub;
   hud.center.style.color = !center || center !== popText ? '' : popColor;
   // combo / ritmo
   const ti = tierOf(human);
@@ -1471,7 +1849,7 @@ function frame(now) {
     `<span style="color:#${PW[k][1].toString(16).padStart(6, '0')}">${PW[k][3]} ${PW[k][0]} ${k === 'escudo' ? '' : human.pw[k].toFixed(1) + 's'}</span>`).join('');
   hud.dash.textContent = human.dashCd > 0 ? `Dash ${human.dashCd.toFixed(1)}s` : 'Dash Q/E ✓';
   hud.dash.style.opacity = human.dashCd > 0 ? 0.45 : 1;
-  hud.center.style.transform = popT > 0 && center === popText ? `scale(${(1 + 0.4 * Math.max(0, popT - 0.9) / 0.3).toFixed(2)})` : '';
+  hud.center.style.transform = popT > 0 && center === popText ? `scale(${(1 + 0.4 * Math.min(1, Math.max(0, popT - 0.9) / 0.3)).toFixed(2)})` : '';
 
   renderer.render(scene, camera);
 }
