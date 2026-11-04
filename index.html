@@ -15,6 +15,7 @@
   #cross{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#fffc;box-shadow:0 0 2px #000}
   #cdwrap{position:absolute;bottom:46px;left:50%;transform:translateX(-50%);width:240px;height:10px;background:#0007;border-radius:5px;overflow:hidden}
   #cdfill{height:100%;width:100%;background:#ffcc33}
+  #cdzone{position:absolute;top:0;height:100%;left:45%;width:25%;background:#ffffff55;box-shadow:inset 0 0 0 1px #fff;display:none}
   #cdlabel{position:absolute;bottom:60px;width:100%;text-align:center;font-size:13px;opacity:.9}
   #help{position:absolute;bottom:14px;width:100%;text-align:center;font-size:13px;opacity:.85}
   #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0009;color:#fff;cursor:pointer;padding:16px;box-sizing:border-box}
@@ -41,7 +42,7 @@
   <div id="sub"></div>
   <div id="cross"></div>
   <div id="cdlabel">Canhão</div>
-  <div id="cdwrap"><div id="cdfill"></div></div>
+  <div id="cdwrap"><div id="cdfill"></div><div id="cdzone"></div></div>
   <div id="help">W A D mover · Mouse mirar · Espaço pular · S canhão (segure para carregar) · combo: Espaço, S, Espaço, S… · R reiniciar · Esc pausa</div>
 </div>
 <div id="overlay"><div class="box">
@@ -76,7 +77,15 @@ const PR = 0.5;           // raio do jogador
 const BR = 0.75;          // raio da bola
 const JUMP = 10.5;        // força do pulo
 const MOVE = 7;           // velocidade de andar
-const CD = 0.4;           // recarga do canhão (s)
+const CD = 0.5;           // recarga do canhão (s)
+// Recarga ativa: apertar o canhão de novo dentro da faixa da barra = PERFEITO
+// (recarrega na hora e o próximo tiro sai mais forte). Cedo demais = TRAVOU.
+const RELOAD_ZONE = [0.45, 0.7]; // faixa da barra de recarga (fração)
+const JAM = 0.3;          // castigo por apertar cedo demais (s)
+const PERFECT_SPEED = 1.2; // tiro perfeito: bola 20% mais rápida (rebote ~44% maior)
+// Arrasto: bola rápida que acerta alguém leva o boneco junto por um instante
+const DRAG_MIN = 20;      // velocidade mínima da bola para arrastar (m/s)
+const DRAG_SHARE = 0.36;  // fração da velocidade da bola que o boneco ganha
 const SURFACE_WINDOW = 0.2; // tempo para pular depois de soltar a bola (s)
 const BALL_LIFE = 3;      // tempo de vida da bola (s)
 const BALL_MASS = 1.6;
@@ -189,7 +198,10 @@ function updateLavaParts(dt) {
   for (const p of lavaParts.slice()) {
     p.t += dt;
     const k = p.t / p.life;
-    if (p.flash) {
+    if (p.ring) {
+      p.m.scale.setScalar(0.4 + Math.sqrt(k) * p.r1);
+      p.m.material.opacity = 0.9 * (1 - k);
+    } else if (p.flash) {
       p.m.scale.setScalar(1 + p.t * 14);
       p.m.material.opacity = 0.85 * (1 - k);
     } else if (p.column) {
@@ -202,9 +214,9 @@ function updateLavaParts(dt) {
       p.m.position.addScaledVector(p.v, dt);
       p.m.scale.setScalar(p.s * Math.max(0.05, 1 - k));
     }
-    if (p.t >= p.life || (!p.flash && !p.column && p.m.position.y < KILL_Y - 1)) {
+    if (p.t >= p.life || (!p.flash && !p.column && !p.ring && p.m.position.y < KILL_Y - 1)) {
       scene.remove(p.m);
-      if (p.flash || p.column) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
+      if (p.flash || p.column || p.ring) { p.m.material.dispose(); if (p.column) p.m.geometry.dispose(); }
       lavaParts.splice(lavaParts.indexOf(p), 1);
     }
   }
@@ -257,6 +269,57 @@ function boom(pos, strong) {
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
   o.connect(g).connect(actx.destination);
   o.start(t); o.stop(t + 0.3);
+}
+function tone(f0, f1, dur, vol, type = 'sine') {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+
+// ---------- Impacto: hitstop, tremor, faíscas, anel ----------
+let hitstop = 0, shake = 0;
+const sparkMats = [0xffffff, 0xfff1a8, 0xffd23a].map(c => new THREE.MeshBasicMaterial({ color: c, fog: false }));
+const shockGeo = new THREE.TorusGeometry(1, 0.06, 8, 40);
+function hitFx(c, b, k) {
+  const dir = b.vel.clone().normalize();
+  const pt = c.pos.clone().lerp(b.pos, 0.5);
+  // faíscas espirrando para a frente do tiro
+  const n = 16 + Math.round(22 * k);
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(partGeo, sparkMats[i % 3]);
+    const s = rand(0.05, 0.16);
+    m.scale.setScalar(s); m.position.copy(pt); scene.add(m);
+    const v = new V3(rand(-1, 1), rand(-0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(4, 12))
+      .addScaledVector(dir, rand(4, 16) * (0.6 + k));
+    lavaParts.push({ m, s, v, t: 0, life: rand(0.25, 0.5) });
+  }
+  // clarão
+  const flash = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color: b.perfect ? 0xffd23f : 0xffffff, transparent: true, opacity: 0.85, fog: false }));
+  flash.position.copy(pt); flash.scale.setScalar(0.3); scene.add(flash);
+  lavaParts.push({ m: flash, flash: true, t: 0, life: 0.14 });
+  // anel de choque perpendicular ao tiro
+  const ring = new THREE.Mesh(shockGeo, new THREE.MeshBasicMaterial({
+    color: b.perfect ? 0xffd23f : b.charged ? 0xff4040 : 0xffffff, transparent: true, opacity: 0.9, fog: false, side: THREE.DoubleSide }));
+  ring.position.copy(pt);
+  ring.quaternion.setFromUnitVectors(new V3(0, 0, 1), dir);
+  scene.add(ring);
+  lavaParts.push({ m: ring, ring: true, t: 0, life: 0.35, r1: 2.5 + 3.5 * k });
+  // boneco amassa com a pancada e volta sozinho
+  c.mesh.scale.set(c.mesh.scale.x * 1.5, c.mesh.scale.y * 0.55, c.mesh.scale.z * 1.5);
+  // congela o jogo por um instante e treme a câmera (forte se envolve você)
+  const me = c.human || b.owner.human;
+  if (me) hitstop = Math.max(hitstop, 0.045 + 0.07 * k);
+  const near = clamp(1 - pt.distanceTo(camFocus) / 40, 0, 1);
+  shake = Math.max(shake, (c.human ? 0.55 : b.owner.human ? 0.3 : 0.15 * near) * (0.6 + k));
+  boom(pt, true);
+  if (near > 0) tone(900 + 500 * k, 140, 0.13, 0.12 * near * (0.5 + k), 'square');
 }
 
 // ---------- Personagens ----------
@@ -318,6 +381,7 @@ const puffGeo = new THREE.SphereGeometry(1, 12, 8);
 const trailGeo = new THREE.CylinderGeometry(BR * 0.75, 0.03, 1, 14, 1, true);
 const trailMat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
 const UP = new V3(0, 1, 0);
+const goldBandMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
 
 function spawnBall(owner, pos, vel) {
   const m = new THREE.Group();
@@ -341,7 +405,7 @@ function removeBall(b) {
   const i = balls.indexOf(b); if (i >= 0) balls.splice(i, 1);
   scene.remove(b.mesh);
   if (b.trail) scene.remove(b.trail);
-  for (const c of chars) if (c.groundBody === b) c.groundBody = null;
+  for (const c of chars) { if (c.groundBody === b) c.groundBody = null; if (c.dragB === b) c.dragB = null; }
 }
 function addPuff(pos, color) {
   const m = new THREE.Mesh(puffGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
@@ -417,7 +481,7 @@ function respawn(c) {
   c.protect = 1.5;         // 1,5 s sem levar empurrão
   // morrer não zera mais o tamanho: perde metade do que cresceu
   c.streak = Math.floor(c.streak / 2); setSize(c);
-  c.lastHitBy = null; c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
+  c.lastHitBy = null; c.dragB = null; c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
 }
 function killChar(c) {
   c.alive = false; c.mesh.visible = false;
@@ -447,9 +511,13 @@ function spawnUnder(p, dir, charge = 0) {
   d.normalize();
   d.y = clamp(d.y, -0.6, 0.35); d.normalize();
   const k = clamp(charge, 0, CHARGE_MAX) / CHARGE_MAX;
-  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS);
+  // recarga perfeita (bots acertam de vez em quando)
+  const perfect = p.perfectNext || (p.ai && Math.random() < 0.12);
+  p.perfectNext = false;
+  const speed = BALL_SPEED * (1 + k * CHARGE_BONUS) * (perfect ? PERFECT_SPEED : 1);
   const ball = spawnBall(p, pos, d.clone().multiplyScalar(speed));
   ball.charged = k > 0.25;
+  if (perfect) { ball.perfect = true; ball.mesh.children[1].material = goldBandMat; }
   // Rebote: a explosão embaixo empurra o boneco pra cima com força proporcional
   // à energia do tiro (cresce com o quadrado da velocidade da bola).
   // Tiro normal ≈ +3 m/s, carga cheia (2x a velocidade) ≈ +12 m/s.
@@ -462,7 +530,8 @@ function spawnUnder(p, dir, charge = 0) {
   // mas só por um instante — tem que apertar Espaço logo em seguida
   p.surfaceWindow = SURFACE_WINDOW;
   p.groundBody = null; p.groundVel.set(0, 0, 0);
-  p.cd = CD * cdMult();
+  p.cd = p.cdFull = CD * cdMult();
+  p.reloadTried = false; p.jammed = false;
   return true;
 }
 function fire(p, dir) {
@@ -518,6 +587,22 @@ function physics(dt) {
   }
   for (const o of bodies) o.pos.addScaledVector(o.vel, dt);
 
+  // arrasto: o boneco atingido vai colado na frente da bola até o tempo acabar
+  for (const c of chars) {
+    if (!c.dragB) continue;
+    const b = c.dragB;
+    c.dragT -= dt;
+    if (!c.alive || c.dragT <= 0 || !balls.includes(b)) { c.dragB = null; continue; }
+    b.vel.multiplyScalar(1 - 1.2 * dt);
+    const sp = b.vel.length();
+    if (sp < 3) { c.dragB = null; continue; }
+    tmp.copy(b.vel).divideScalar(sp);
+    const tx = b.pos.x + tmp.x * (b.r + c.r) * 0.95, ty = b.pos.y + tmp.y * (b.r + c.r) * 0.95, tz = b.pos.z + tmp.z * (b.r + c.r) * 0.95;
+    const kk = Math.min(1, 25 * dt);
+    c.pos.x += (tx - c.pos.x) * kk; c.pos.y += (ty - c.pos.y) * kk; c.pos.z += (tz - c.pos.z) * kk;
+    c.vel.copy(b.vel);
+  }
+
   // colisões esfera-esfera
   for (let i = 0; i < bodies.length; i++) {
     const a = bodies[i];
@@ -528,7 +613,25 @@ function physics(dt) {
       tmp.subVectors(b.pos, a.pos);
       const rr = a.r + b.r, d2 = tmp.lengthSq();
       if (d2 >= rr * rr || d2 < 1e-8) continue;
+      if (a.dragB === b || b.dragB === a) continue; // já estão grudados
       const d = Math.sqrt(d2), n = tmp.divideScalar(d), pen = rr - d;
+      // bola rápida de outro jogador acertando um boneco: pancada + arrasto
+      const pc = a.kind === 'p' && b.kind === 'b' ? a : b.kind === 'p' && a.kind === 'b' ? b : null;
+      if (pc) {
+        const bl = pc === a ? b : a;
+        const toP = pc === a ? -1 : 1; // n aponta de a para b
+        const into = (bl.vel.x * n.x + bl.vel.y * n.y + bl.vel.z * n.z) * toP;
+        if (bl.owner !== pc && pc.protect <= 0 && !pc.dragB && into > DRAG_MIN) {
+          pc.lastHitBy = bl.owner; pc.lastHitT = clock;
+          const k = clamp((into - DRAG_MIN) / 70, 0, 1); // 45 m/s ≈ 0.36 · carga cheia ≈ 1
+          const v = bl.vel.clone().multiplyScalar(DRAG_SHARE * Math.sqrt(pc.im)).addScaledVector(pc.vel, 0.25);
+          pc.vel.copy(v); bl.vel.copy(v);
+          pc.dragB = bl; pc.dragT = 0.16 + 0.24 * k + (bl.perfect ? 0.08 : 0);
+          pc.groundBody = null; pc.groundTime = 1; pc.surfaceWindow = 0;
+          hitFx(pc, bl, k);
+          continue;
+        }
+      }
       const sum = a.im + b.im;
       a.pos.addScaledVector(n, -pen * a.im / sum);
       b.pos.addScaledVector(n, pen * b.im / sum);
@@ -663,14 +766,32 @@ addEventListener('keyup', e => {
 // Canhão: apertou começa a carregar, soltou dispara. Toque rápido = tiro normal.
 function startCharge() {
   if (human.charging || !human.alive) return;
+  tryReload();
   human.charging = true; human.chargeT = 0;
+}
+// Recarga ativa: apertar o canhão enquanto recarrega. Na faixa = PERFEITO, cedo = TRAVOU.
+let reloadMsg = '', reloadColor = '', reloadT = 0;
+function tryReload() {
+  if (human.cd <= 0 || human.reloadTried || state !== 'play') return;
+  human.reloadTried = true;
+  const prog = 1 - human.cd / human.cdFull;
+  if (prog >= RELOAD_ZONE[0] && prog <= RELOAD_ZONE[1]) {
+    human.cd = 0; human.perfectNext = true;
+    reloadMsg = 'PERFEITO!'; reloadColor = '#ffd23f'; reloadT = 0.7;
+    tone(880, 1760, 0.12, 0.14); tone(1320, 2200, 0.18, 0.08, 'triangle');
+  } else if (prog < RELOAD_ZONE[0]) {
+    human.cd = human.cdFull = human.cd + JAM; human.jammed = true;
+    reloadMsg = 'TRAVOU!'; reloadColor = '#ff5a5a'; reloadT = 0.7;
+    tone(220, 70, 0.18, 0.16, 'sawtooth');
+  }
 }
 function releaseCharge() {
   if (!human.charging) return;
   human.charging = false;
   human.pendingCharge = human.chargeT;
   human.chargeT = 0;
-  human.wantUnder = 0.08;
+  // se ainda está recarregando, o tiro sai assim que a recarga acabar
+  human.wantUnder = Math.max(0.08, human.cd + 0.05);
 }
 addEventListener('contextmenu', e => e.preventDefault());
 
@@ -774,6 +895,7 @@ function resetRound() {
     c.vel.set(0, 0, 0); c.alive = true; c.mesh.visible = true; c.cd = 0; c.groundTime = 1;
     c.wantUnder = c.wantFire = c.wantJump = 0; c.surfaceWindow = 0; c.groundBody = null;
     c.charging = false; c.chargeT = 0; c.pendingCharge = 0;
+    c.perfectNext = c.jammed = false; c.reloadTried = true; c.dragB = null;
     c.kills = 0; c.streak = 0; c.lastHitBy = null; c.protect = 0; c.respawnT = 0; setSize(c);
     c.yaw = c.targetYaw = Math.atan2(-c.pos.x, -c.pos.z);
     if (c.ai) { c.ai.spawnT = 0; c.ai.jumpT = 0; c.ai.spawnDelay = rand(0, c.ai.react); }
@@ -865,6 +987,7 @@ const hud = {
   top: document.getElementById('top'), feed: document.getElementById('feed'),
   center: document.getElementById('center'), sub: document.getElementById('sub'),
   cd: document.getElementById('cdfill'),
+  zone: document.getElementById('cdzone'), label: document.getElementById('cdlabel'),
 };
 let acc = 0, last = performance.now();
 
@@ -880,10 +1003,21 @@ function frame(now) {
       if (c.ai && c.alive) botThink(c, dt);
     }
     updateState(dt);
-    acc += dt;
-    let n = 0;
-    while (acc >= STEP && n < 8) { physics(STEP); acc -= STEP; n++; }
-    if (n === 8) acc = 0;
+    // hitstop: o mundo congela um instante na pancada
+    if (hitstop > 0) hitstop -= dt;
+    else {
+      acc += dt;
+      let n = 0;
+      while (acc >= STEP && n < 8) { physics(STEP); acc -= STEP; n++; }
+      if (n === 8) acc = 0;
+    }
+    reloadT = Math.max(0, reloadT - dt);
+    // rastro de fumaça atrás de quem está sendo arrastado
+    for (const c of chars) {
+      if (!c.dragB) continue;
+      c.dragPuff = (c.dragPuff || 0) - dt;
+      if (c.dragPuff <= 0) { addPuff(c.pos, c.color); c.dragPuff = 0.03; }
+    }
     for (const p of puffs.slice()) {
       p.t += dt; p.m.scale.setScalar(0.4 + p.t * 6); p.m.material.opacity = 0.7 * (1 - p.t / 0.3);
       if (p.t > 0.3) { scene.remove(p.m); puffs.splice(puffs.indexOf(p), 1); }
@@ -916,7 +1050,11 @@ function frame(now) {
     c.mesh.scale.y += (ty - c.mesh.scale.y) * k;
     // carregando: o boneco brilha cada vez mais
     // brilho: dourado ao crescer; carregando, cor própria; com sequência, brilho leve constante
-    if (c.growT > 0) {
+    if (c.dragB) {
+      // sendo arrastado: pisca branco
+      c.bodyMat.emissive.setHex(0xffffff);
+      c.bodyMat.emissiveIntensity = 0.7;
+    } else if (c.growT > 0) {
       c.bodyMat.emissive.setHex(0xffd23f);
       c.bodyMat.emissiveIntensity = 0.9 * (c.growT / GROW_PULSE);
     } else {
@@ -956,6 +1094,13 @@ function frame(now) {
   const look = new V3(camFocus.x, camFocus.y + 0.8, camFocus.z);
   camera.position.set(look.x + Math.sin(camYaw) * cp * dist, look.y + Math.sin(camPitch) * dist, look.z + Math.cos(camYaw) * cp * dist);
   camera.lookAt(look);
+  // tremor da câmera na pancada
+  if (shake > 0.001) {
+    camera.position.x += rand(-1, 1) * shake * 0.35;
+    camera.position.y += rand(-1, 1) * shake * 0.35;
+    camera.rotation.z += rand(-1, 1) * shake * 0.04;
+    shake *= Math.exp(-9 * dt);
+  }
   sun.position.set(camFocus.x + 8, camFocus.y + 45, camFocus.z + 5);
   sun.target.position.copy(camFocus);
   // perto do fim: a grade acende e a borda da tela fica vermelha
@@ -989,9 +1134,13 @@ function frame(now) {
     hud.cd.style.width = (100 * human.chargeT / CHARGE_MAX).toFixed(0) + '%';
     hud.cd.style.background = human.chargeT >= CHARGE_MAX ? '#ff3b3b' : '#ff8c42';
   } else {
-    hud.cd.style.width = (100 * (1 - human.cd / (CD * cdMult()))).toFixed(0) + '%';
-    hud.cd.style.background = human.cd <= 0 ? '#ffcc33' : '#887744';
+    hud.cd.style.width = (100 * (1 - human.cd / (human.cdFull || CD))).toFixed(0) + '%';
+    hud.cd.style.background = human.cd <= 0 ? (human.perfectNext ? '#ffe680' : '#ffcc33') : human.jammed ? '#c0392b' : '#887744';
   }
+  hud.zone.style.display = human.cd > 0 && !human.reloadTried && !human.charging ? 'block' : 'none';
+  hud.label.textContent = reloadT > 0 ? reloadMsg : human.perfectNext ? 'Canhão ★ PERFEITO' : 'Canhão';
+  hud.label.style.color = reloadT > 0 ? reloadColor : human.perfectNext ? '#ffd23f' : '';
+  hud.label.style.fontSize = reloadT > 0 ? (13 + 10 * Math.max(0, reloadT - 0.5) / 0.2 + 5).toFixed(0) + 'px' : '';
   let center = '', sub = '';
   if (state === 'countdown') { center = Math.ceil(3 - stateT); sub = 'A plataforma vai sumir — prepare o canhão'; }
   else if (state === 'play' && stateT < 0.8) center = 'VAI!';
